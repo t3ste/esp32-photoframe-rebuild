@@ -181,6 +181,224 @@ menu "Photoframe optional features"
             Uses face-crop sidecar files and pre-rendered Cover/Fit variants
             produced by process-cli.
 
+    config FEATURE_WEBCAL
+        bool "webcal:// subscription links"
+        default n
+        depends on FEATURE_AGENDA
+        help
+            Accepts webcal:// (and webcals://) subscription links for the
+            Agenda calendars and fetches them over https://, the way calendar
+            apps hand them out. Needs the Agenda feature.
+
+    config FEATURE_SOURCE_AUTH
+        bool "Login in the calendar and ToDo URLs"
+        default n
+        depends on FEATURE_AGENDA
+        help
+            A calendar or ToDo URL may carry a login,
+            https://user:password@host/path, which the frame answers a
+            server's 401 with (HTTP Basic or Digest). The URL fields stay
+            write-only. Over plain http:// the login is only sent when a
+            setting allows it. Needs the Agenda feature.
+
+    config FEATURE_CALDAV
+        bool "CalDAV calendars"
+        default n
+        depends on FEATURE_SOURCE_AUTH
+        help
+            A calendar address written caldavs://user:password@host/path (or
+            caldav:// for plain http) is queried with a CalDAV REPORT: the
+            server sends only the events of the coming days and expands
+            repeating events itself, instead of the frame downloading the whole
+            calendar. Needs the source-auth feature (and through it Agenda).
+
+    config FEATURE_CALDAV_TODO
+        bool "CalDAV task lists"
+        default n
+        depends on FEATURE_CALDAV
+        help
+            A caldavs://user:password@host/path address in the Agenda's ToDo
+            field is read as a CalDAV task list: its open to-dos (VTODO) show
+            up in the ToDo column with their priority and due date. Needs
+            the caldav feature.
+
+    config FEATURE_INFO_SCREENS
+        bool "Information screens in the Agenda rotation"
+        default n
+        depends on FEATURE_AGENDA && FEATURE_GLYPHS
+        help
+            Full-screen pages besides the Agenda that take turns with it on
+            the Agenda's schedule. This is only the base (drawing primitives,
+            the rotation, the settings); the pages come with their own
+            options, such as the chore wheel. Needs the Agenda and the glyphs
+            (real umlauts) options.
+
+    config FEATURE_CHORE_WHEEL
+        bool "Chore wheel screen"
+        default n
+        depends on FEATURE_INFO_SCREENS
+        help
+            A page with a donut wheel and one card per chore: who does what
+            this week, and next week. The chores go round the members by ISO
+            week. Needs the information screens option.
+
+    config FEATURE_WEATHER_SCREEN
+        bool "Weather screen"
+        default n
+        depends on FEATURE_INFO_SCREENS && FEATURE_OVERLAYS
+        help
+            A page with today's weather as a big icon and temperature and
+            the next four days as rows. It uses the weather place and
+            provider of the overlays option. Needs the information screens
+            option and the overlays option.
+
+    config FEATURE_FACT_OF_THE_DAY
+        bool "Fact-of-the-day screen"
+        default n
+        depends on FEATURE_INFO_SCREENS
+        help
+            A page with one fact a day: 24 built-in facts in English and
+            German, or your own list (a text file in the storage, edited in
+            the Web UI). Needs the information screens option.
+
+    config FEATURE_FINANCE_SNAPSHOT
+        bool "Exchange-rate screen"
+        default n
+        depends on FEATURE_INFO_SCREENS
+        help
+            A page with the ECB reference rates of up to four currencies
+            against the euro: the rate in big digits, the change against the
+            day before and a sparkline of the last 30 working days. Free
+            and without a key. Needs the information screens option.
+
+    config FEATURE_FUEL_PRICES
+        bool "Fuel-price screen"
+        default n
+        depends on FEATURE_INFO_SCREENS && FEATURE_OVERLAYS
+        help
+            A page with the cheapest petrol stations around the weather
+            place: brand, street, distance and the price like on the pump.
+            Germany only (Tankerkoenig, needs a free personal API key). Needs
+            the information screens option and the overlays option.
+
+    config FEATURE_MARKET_QUOTES
+        bool "Markets screen (stocks, ETFs, indices, crypto)"
+        default n
+        depends on FEATURE_INFO_SCREENS
+        help
+            A page with up to four symbols (stocks, ETFs, indices, futures,
+            crypto, currency pairs): the last price in big digits, the change
+            against the day before and a sparkline of the last 30 days. The
+            prices come from Yahoo Finance (no key, unofficial), and if it
+            does not answer from Twelve Data or Alpha Vantage (free personal
+            keys, optional); the last good answers are kept for wakes without
+            network. Needs the information screens option.
+
+    config FEATURE_ROUTE_TIME
+        bool "Travel time on the fuel page"
+        default n
+        depends on FEATURE_FUEL_PRICES
+        help
+            Shows the current travel time there and back between two addresses
+            in the header of the fuel-price page, from TomTom or HERE (a free
+            key of one of them is needed), and draws a time that is longer than
+            usual in red. Needs the fuel prices option.
+
+    config FEATURE_ARTWORKS
+        bool "Artworks rotation mode"
+        default n
+        depends on FEATURE_OVERLAYS
+        help
+            A rotation mode that shows a painting, drawing or print from the
+            Rijksmuseum, SMK or the Smithsonian (public domain or CC0 only):
+            the kind of work is chosen first, then a random work. The picture
+            is kept in an album (Art) for wakes without network, the oldest
+            ones are deleted to keep free space, and a small caption can be
+            drawn at the bottom. Needs the overlays option.
+
+    config FEATURE_SCHEDULE_PAGES
+        bool "Pages per Agenda schedule"
+        default n
+        depends on FEATURE_INFO_SCREENS
+        help
+            Lets each Agenda schedule draw its own pages (the Agenda, the chore
+            wheel, the weather, ...) instead of one rotation shared by all of
+            them. The schedule with the smaller number wins when two overlap, a
+            minimum time between two displays (and a hold time per schedule)
+            keeps one display from replacing another at once, and the photo
+            rotation gives way to them. Without any page assigned the frame
+            behaves as before. Needs the information screens option.
+
+    config FEATURE_UPLOAD_DEDUP
+        bool "Duplicate detection at upload"
+        default n
+        help
+            Every album keeps a small index of the MD5 of its images. An
+            upload that is already in the album is refused (or stored with a
+            warning) - by the file bytes, or by the decoded pixels so that the
+            same picture from two browsers still counts. Images that were
+            there before can be indexed in the background, and a report lists
+            the duplicates of an album. Needs storage (SD card or flash).
+
+    config FEATURE_GLYPHS
+        bool "Real glyphs for umlauts, sharp s, degree and euro"
+        default n
+        select FORK_IMAGE_PIPELINE
+        help
+            The 17x24 bitmap font of the display text has ASCII only, so
+            "Käse" is drawn "Kaese" and the degree and euro signs are lost.
+            With this option ä ö ü Ä Ö Ü ß ° € are drawn as themselves, in
+            overlay captions, headlines, the Agenda and Telegram captions. It
+            only changes text that is drawn by another feature.
+
+    config FEATURE_RECIPES
+        bool "Recipe page"
+        default n
+        depends on FEATURE_INFO_SCREENS
+        help
+            A page with a cooking recipe: a recipe of Chefkoch (the recipe of the
+            day, classic, vegetarian or vegan, or a search with filters) or of
+            TheMealDB (by category), with its picture, drawn in landscape or
+            portrait to suit the display orientation. The title, the
+            ingredients and the preparation are shown in the largest size in
+            which everything fits; a recipe without a picture or with too much
+            text is skipped, and a small QR code of the recipe's address can be
+            added. Needs the information screens option.
+
+    config FEATURE_AGENDA_RRULE
+        bool "Full recurrence rules in the Agenda calendars"
+        default n
+        depends on FEATURE_AGENDA
+        help
+            The Agenda's calendar reader takes every recurrence rule of RFC
+            5545 - monthly and yearly repeats, BYDAY lists and ordinals
+            ("second Monday", "last Friday"), BYMONTHDAY, BYSETPOS, and so on -
+            through libical's recurrence iterator, instead of daily and weekly
+            repeats only. Adds about 100 KB of flash. Needs the Agenda feature.
+
+    config FEATURE_TEXT_OUTLINE
+        bool "Overlay and caption text with a border instead of a bar"
+        default n
+        depends on FEATURE_OVERLAYS
+        select FORK_IMAGE_PIPELINE
+        help
+            The weather and headline overlays and the captions are drawn as a
+            black or white bar across the picture. With this option the Web
+            UI can also choose the text alone, without a bar: white text with a
+            black border or black text with a white border, the border one or
+            two pixels wide. Weather icons get the same border. The default is
+            still the bar. Needs the overlays option.
+
+    config FEATURE_MULTI_UPLOAD
+        bool "Upload several images at once"
+        default n
+        help
+            The Web UI's upload takes a whole selection of files: photos are
+            converted with the current settings one after the other, and
+            pre-rendered EPDGZ/PNG files (for instance from process-cli) are
+            uploaded as they are. The upload endpoint accepts an image
+            without a thumbnail.
+
     config FORK_FIXES
         bool "General fixes and robustness improvements"
         default n

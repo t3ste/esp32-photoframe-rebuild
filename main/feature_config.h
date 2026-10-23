@@ -100,6 +100,126 @@
 #define FEATURE_FACECROP 0
 #endif
 
+#ifdef CONFIG_FEATURE_WEBCAL
+#define FEATURE_WEBCAL 1
+#else
+#define FEATURE_WEBCAL 0
+#endif
+
+#ifdef CONFIG_FEATURE_SOURCE_AUTH
+#define FEATURE_SOURCE_AUTH 1
+#else
+#define FEATURE_SOURCE_AUTH 0
+#endif
+
+#ifdef CONFIG_FEATURE_CALDAV
+#define FEATURE_CALDAV 1
+#else
+#define FEATURE_CALDAV 0
+#endif
+
+#ifdef CONFIG_FEATURE_CALDAV_TODO
+#define FEATURE_CALDAV_TODO 1
+#else
+#define FEATURE_CALDAV_TODO 0
+#endif
+
+#ifdef CONFIG_FEATURE_INFO_SCREENS
+#define FEATURE_INFO_SCREENS 1
+#else
+#define FEATURE_INFO_SCREENS 0
+#endif
+
+#ifdef CONFIG_FEATURE_CHORE_WHEEL
+#define FEATURE_CHORE_WHEEL 1
+#else
+#define FEATURE_CHORE_WHEEL 0
+#endif
+
+#ifdef CONFIG_FEATURE_WEATHER_SCREEN
+#define FEATURE_WEATHER_SCREEN 1
+#else
+#define FEATURE_WEATHER_SCREEN 0
+#endif
+
+#ifdef CONFIG_FEATURE_FACT_OF_THE_DAY
+#define FEATURE_FACT_OF_THE_DAY 1
+#else
+#define FEATURE_FACT_OF_THE_DAY 0
+#endif
+
+#ifdef CONFIG_FEATURE_FINANCE_SNAPSHOT
+#define FEATURE_FINANCE_SNAPSHOT 1
+#else
+#define FEATURE_FINANCE_SNAPSHOT 0
+#endif
+
+#ifdef CONFIG_FEATURE_FUEL_PRICES
+#define FEATURE_FUEL_PRICES 1
+#else
+#define FEATURE_FUEL_PRICES 0
+#endif
+
+#ifdef CONFIG_FEATURE_MARKET_QUOTES
+#define FEATURE_MARKET_QUOTES 1
+#else
+#define FEATURE_MARKET_QUOTES 0
+#endif
+
+#ifdef CONFIG_FEATURE_ROUTE_TIME
+#define FEATURE_ROUTE_TIME 1
+#else
+#define FEATURE_ROUTE_TIME 0
+#endif
+
+#ifdef CONFIG_FEATURE_ARTWORKS
+#define FEATURE_ARTWORKS 1
+#else
+#define FEATURE_ARTWORKS 0
+#endif
+
+#ifdef CONFIG_FEATURE_SCHEDULE_PAGES
+#define FEATURE_SCHEDULE_PAGES 1
+#else
+#define FEATURE_SCHEDULE_PAGES 0
+#endif
+
+#ifdef CONFIG_FEATURE_RECIPES
+#define FEATURE_RECIPES 1
+#else
+#define FEATURE_RECIPES 0
+#endif
+
+#ifdef CONFIG_FEATURE_TEXT_OUTLINE
+#define FEATURE_TEXT_OUTLINE 1
+#else
+#define FEATURE_TEXT_OUTLINE 0
+#endif
+
+#ifdef CONFIG_FEATURE_UPLOAD_DEDUP
+#define FEATURE_UPLOAD_DEDUP 1
+#else
+#define FEATURE_UPLOAD_DEDUP 0
+#endif
+
+#ifdef CONFIG_FEATURE_GLYPHS
+#define FEATURE_GLYPHS 1
+#else
+#define FEATURE_GLYPHS 0
+#endif
+
+#ifdef CONFIG_FEATURE_AGENDA_RRULE
+#define FEATURE_AGENDA_RRULE 1
+#else
+#define FEATURE_AGENDA_RRULE 0
+#endif
+
+#ifdef CONFIG_FEATURE_MULTI_UPLOAD
+#define FEATURE_MULTI_UPLOAD 1
+#else
+#define FEATURE_MULTI_UPLOAD 0
+#endif
+
 #ifdef CONFIG_FORK_FIXES
 #define FORK_FIXES 1
 #else
@@ -148,11 +268,17 @@
 // the config JSON handler (apply_config_from_json() in utils.c) collects errors
 // instead of stopping at the first bad field, and the deep-sleep wake path runs on
 // a task with a larger stack.
-#define FORK_ANY                                                                               \
-    (FORK_FIXES || FEATURE_TELEGRAM || FEATURE_OVERLAYS || FEATURE_AGENDA || FEATURE_CHIMES || \
-     FEATURE_CLIMATE || FEATURE_ALARMCLOCK || FEATURE_VOICE_STOP || FEATURE_BATTERY_HISTORY || \
-     FEATURE_DISPLAY_HISTORY || FEATURE_HTTPS || FEATURE_OFFLINE_HOTSPOT ||                    \
-     FEATURE_ERROR_BANNER || FEATURE_OTA_CHANNEL || FEATURE_WIFI_RESILIENCE || FEATURE_FACECROP)
+#define FORK_ANY                                                                                   \
+    (FORK_FIXES || FEATURE_TELEGRAM || FEATURE_OVERLAYS || FEATURE_AGENDA || FEATURE_CHIMES ||     \
+     FEATURE_CLIMATE || FEATURE_ALARMCLOCK || FEATURE_VOICE_STOP || FEATURE_BATTERY_HISTORY ||     \
+     FEATURE_DISPLAY_HISTORY || FEATURE_HTTPS || FEATURE_OFFLINE_HOTSPOT ||                        \
+     FEATURE_ERROR_BANNER || FEATURE_OTA_CHANNEL || FEATURE_WIFI_RESILIENCE || FEATURE_FACECROP || \
+     FEATURE_WEBCAL || FEATURE_SOURCE_AUTH || FEATURE_CALDAV || FEATURE_CALDAV_TODO ||             \
+     FEATURE_UPLOAD_DEDUP || FEATURE_GLYPHS || FEATURE_INFO_SCREENS || FEATURE_CHORE_WHEEL ||      \
+     FEATURE_WEATHER_SCREEN || FEATURE_FACT_OF_THE_DAY || FEATURE_FINANCE_SNAPSHOT ||              \
+     FEATURE_FUEL_PRICES || FEATURE_MARKET_QUOTES || FEATURE_ROUTE_TIME || FEATURE_ARTWORKS ||     \
+     FEATURE_SCHEDULE_PAGES || FEATURE_RECIPES || FEATURE_TEXT_OUTLINE || FEATURE_MULTI_UPLOAD ||  \
+     FEATURE_AGENDA_RRULE)
 
 // Second line of defence behind build.py and Kconfig: the Kconfig capability
 // symbols mirror the board headers, and this makes a disagreement a build error.

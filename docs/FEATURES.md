@@ -6,12 +6,16 @@ firmware**: same behaviour, same web UI, same `GET /api/config`.
 
 To see most of them working without setting up a Telegram bot, a calendar or a
 Home Assistant instance, import the ready-made [demo package](DEMO_PACKAGE.md).
+For a walkthrough of the newer options (calendar logins and CalDAV, batch upload, duplicate detection, the
+information pages and what each needs) see the [user guide to the extras](EXTRAS_USER_GUIDE.md); what the Agenda and the
+pages look like is in [SCREENSHOTS.md](SCREENSHOTS.md).
 
 ```bash
 python build.py --board waveshare_photopainter_73 --with agenda,telegram
 python build.py --board waveshare_photopainter_73 --all-features
 python build.py --board seeedstudio_xiao_ee02 --all-features --without https
 python build.py --board seeedstudio_xiao_ee02 --list-features
+python build.py --board waveshare_photopainter_73 --with extras
 ```
 
 | Option (`--with ...`) | What it adds | Needs | Details |
@@ -31,7 +35,41 @@ python build.py --board seeedstudio_xiao_ee02 --list-features
 | `ota-channel` | OTA release channel (stable/pre-release) | - | |
 | `wifi-resilience` | WiFi options: battery TX cap, performance mode, a lower reconnect budget for Telegram power save, MIC-failure / 802.1X counted as a rejected password; the former "extended retry" and "reprovision when attempts run out" settings, the cold-boot retries and the "keep the credentials" switch **no longer exist (removed in v219.0.0)**: upstream's own policy since v2.19.0 never drops the credentials for an absent AP and retries without limit, only a rejected password ends in provisioning | - | |
 | `facecrop` | Face-aware crop sidecars and Cover/Fit image variants | - | [FACE_CROP.md](FACE_CROP.md), [SCALE_MODE.md](SCALE_MODE.md) |
+| `webcal` | `webcal://` subscription links for the Agenda calendars (fetched over https) | `agenda` | |
+| `source-auth` | A login (`https://user:password@host/...`) in the Agenda calendar and ToDo addresses, answered with HTTP Basic or Digest | `agenda` | [SOURCE_AUTH.md](SOURCE_AUTH.md) |
+| `caldav` | CalDAV calendars (`caldavs://user:password@host/...`): the server sends only the coming days and expands repeating events | `source-auth` | [CALDAV.md](CALDAV.md) |
+| `agenda-rrule` | All of RFC 5545's recurrence rules in the Agenda calendars - monthly and yearly repeats, "the second Monday", "the last Friday", BYDAY lists, BYSETPOS - through libical; adds about 96 KB of flash | `agenda` | [CALENDAR_RRULE_ENGINE.md](CALENDAR_RRULE_ENGINE.md) |
+| `caldav-todo` | CalDAV task lists (`caldavs://...` as the ToDo address): the open to-dos with priority and due date in the ToDo column | `caldav` | [CALDAV_TODO.md](CALDAV_TODO.md) |
+| `glyphs` | Real glyphs for ä ö ü Ä Ö Ü ß ° € in the text the frame draws (overlays, Agenda, Telegram captions) instead of ae/oe/ue/ss | - | [GLYPHS.md](GLYPHS.md) |
+| `text-outline` | Overlay and caption text without a bar: white text with a black border or black text with a white border, 1 or 2 pixels wide, weather icons with the same border | `overlays` | [TEXT_OUTLINE.md](TEXT_OUTLINE.md) |
+| `info-screens` | Full-screen information pages that take turns with the Agenda on its schedule (the base for the pages below) | `agenda`, `glyphs` | [INFO_SCREENS.md](INFO_SCREENS.md) |
+| `chore-wheel` | Chore wheel page: who does which chore this week - a donut wheel and one card per chore, the chores go round the members by calendar week | `info-screens` | [CHORE_WHEEL.md](CHORE_WHEEL.md) |
+| `weather-screen` | Weather page: today as a big icon and temperature, and the next four days as rows | `info-screens`, `overlays` | [WEATHER_SCREEN.md](WEATHER_SCREEN.md) |
+| `fact-of-the-day` | Fact-of-the-day page: 24 built-in facts in English and German or your own list, a new fact every day | `info-screens` | [FACT_OF_THE_DAY.md](FACT_OF_THE_DAY.md) |
+| `finance-snapshot` | Exchange-rate page: ECB reference rates of up to four currencies with the change and a 30-day line, free and without a key | `info-screens` | [FINANCE_SNAPSHOT.md](FINANCE_SNAPSHOT.md) |
+| `fuel-prices` | Fuel-price page: the cheapest petrol stations around the weather place, price like on the pump (Germany, free Tankerkoenig API key) | `info-screens`, `overlays` | [FUEL_PRICES.md](FUEL_PRICES.md) |
+| `market-quotes` | Markets page: up to four stocks, ETFs, indices, futures, crypto or currency pairs with the last price, the change and a 30-day line; Yahoo Finance without a key, Twelve Data and Alpha Vantage (free keys) as fallbacks | `info-screens` | [MARKET_QUOTES.md](MARKET_QUOTES.md) |
+| `route-time` | Travel time there and back between two addresses in the header of the fuel page, with the traffic of now (TomTom, HERE with a free key); a way that takes longer than usual is a red block with a "!" | `fuel-prices` | [ROUTE_TIME.md](ROUTE_TIME.md) |
+| `artworks` | Artworks rotation mode: a painting, drawing or print from the Rijksmuseum, SMK or the Smithsonian (public domain / CC0) per rotation, kept in an album for wakes without network, deleting the oldest to keep free space, with a small caption | `overlays` | [ARTWORKS.md](ARTWORKS.md) |
+| `schedule-pages` | Pages per Agenda schedule: each schedule draws its own pages, the smaller number wins when two overlap, a minimum time (or a hold time per schedule) keeps one display from replacing another at once, the photo rotation gives way; without any page assigned nothing changes | `info-screens` | [SCHEDULE_PAGES.md](SCHEDULE_PAGES.md) |
+| `recipes` | Recipe page: one cooking recipe with its picture - Chefkoch (recipe of the day or a search with filters, German) or TheMealDB (by category, English) - in the biggest text that fits, in landscape and portrait, with an optional QR code of the recipe; the filters are set in the Web UI | `info-screens` | [RECIPES.md](RECIPES.md) |
+| `upload-dedup` | Duplicate detection at upload: a per-album MD5 index, refuse or warn, by file or by pixels, background indexing of earlier images, duplicate report | - | [UPLOAD_DEDUP.md](UPLOAD_DEDUP.md) |
+| `multi-upload` | Web UI: upload several images at once - photos converted one after the other, pre-rendered EPDGZ/PNG files as they are | - | [MULTI_UPLOAD.md](MULTI_UPLOAD.md) |
 | `fixes` | General bug fixes and robustness improvements | - | |
+
+## Bundles
+
+A bundle is one name for several options: `--with extras` asks for every member at once. It is not an option of its own - nothing is compiled
+for the name, the build only ever sees its members - so a build with `extras` is the same as one that lists them all.
+
+| Bundle | Members |
+| --- | --- |
+| `extras` | everything added after the first fork release: `webcal`, `multi-upload`, `source-auth`, `caldav`, `caldav-todo`, `agenda-rrule`, `upload-dedup`, `glyphs`, `info-screens`, `chore-wheel`, `weather-screen`, `fact-of-the-day`, `finance-snapshot`, `fuel-prices`, `market-quotes`, `route-time`, `artworks`, `schedule-pages`, `recipes`, `text-outline` |
+
+What the members need is added as usual (`extras` pulls in `agenda` and `overlays`). `--without fuel-prices` takes a member out again, and
+`--without extras` takes all of them out of `--all-features`. A member that the board cannot build is skipped with a notice instead of stopping the
+build (all members of `extras` need no special hardware, so every board builds all of them). `extras` does not include the options that were
+already in the first release (Telegram, overlays, the Agenda, chimes, alarm clock, ...) nor `fixes`; `--all-features` is still everything.
 
 Which optional hardware each board has:
 
@@ -46,6 +84,8 @@ Which optional hardware each board has:
   speaker) is an error that names the missing hardware and the boards that have it.
 - `--all-features` enables everything the board supports and prints a warning for each
   feature it skipped.
+- A bundle (`--with extras`) stands for several features; a member the board cannot run is skipped with a notice,
+  and `--without` trims a member.
 - A feature that needs another one pulls it in and says so (`--with voice-stop`
   adds `alarmclock`).
 - Kconfig (`main/Kconfig`) and a compile-time check (`main/feature_config.h`) repeat

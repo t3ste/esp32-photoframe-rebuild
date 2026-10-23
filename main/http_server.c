@@ -34,6 +34,31 @@
 #include "debug_log.h"
 #include "display_flow.h"
 #include "display_manager.h"
+#if FEATURE_UPLOAD_DEDUP
+#include "dedup_service.h"
+#endif
+#if FEATURE_INFO_SCREENS
+#include "info_screens.h"
+#endif
+#if FEATURE_FACT_OF_THE_DAY
+#include "fact_service.h"
+#endif
+#if FEATURE_FUEL_PRICES
+#include "fuel_prices.h"
+#endif
+#if FEATURE_MARKET_QUOTES
+#include "market_quotes.h"
+#endif
+#if FEATURE_ARTWORKS
+#include "art_select.h"
+#endif
+#if FEATURE_ROUTE_TIME
+#include "route_service.h"
+#include "route_time.h"
+#endif
+#if FEATURE_TEXT_OUTLINE
+#include "text_outline.h"
+#endif
 #include "esp_app_desc.h"
 #include "esp_heap_caps.h"
 #include "esp_http_server.h"
@@ -967,6 +992,17 @@ static esp_err_t upload_image_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
+#if FEATURE_MULTI_UPLOAD
+    // The thumbnail is optional: a pre-rendered .epdgz sent by the batch upload has no
+    // preview a browser could draw, so it comes without one (the gallery then shows its
+    // placeholder icon).
+    if (!result.has_image) {
+        if (result.has_thumbnail)
+            unlink(result.thumbnail_path);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Upload incomplete - expected an image");
+        return ESP_FAIL;
+    }
+#else
     if (!result.has_image || !result.has_thumbnail) {
         if (result.has_image)
             unlink(result.image_path);
@@ -976,6 +1012,7 @@ static esp_err_t upload_image_handler(httpd_req_t *req)
                             "Upload incomplete - expected image and thumbnail");
         return ESP_FAIL;
     }
+#endif
 
     ESP_LOGI(TAG, "Upload complete, saving PNG directly");
 
@@ -1008,6 +1045,49 @@ static esp_err_t upload_image_handler(httpd_req_t *req)
     snprintf(final_dest_path, sizeof(final_dest_path), "%s/%s", album_path, dest_filename);
     snprintf(final_thumb_path, sizeof(final_thumb_path), "%s/%s", album_path, jpg_filename);
 
+#if FEATURE_UPLOAD_DEDUP
+    // Is this image already in the album (dedup.h)? The upload is still in its temporary file.
+    dedup_digest_t upload_digest;
+    bool have_digest = false;
+    bool is_duplicate = false;
+    char duplicate_of[256] = "";
+    if (dedup_service_mode() != DEDUP_MODE_OFF) {
+        have_digest =
+            dedup_service_hash(result.image_path, dest_filename, &upload_digest) == ESP_OK;
+        if (have_digest) {
+            is_duplicate = dedup_service_find(album_path, &upload_digest, dest_filename,
+                                              duplicate_of, sizeof(duplicate_of));
+        }
+    }
+    if (is_duplicate && dedup_service_mode() == DEDUP_MODE_SKIP) {
+        // "duplicates=allow" stores it anyway (the Web UI's "add it anyway")
+        bool allow_duplicate = false;
+        char dup_query[128], dup_value[16];
+        if (httpd_req_get_url_query_str(req, dup_query, sizeof(dup_query)) == ESP_OK &&
+            httpd_query_key_value(dup_query, "duplicates", dup_value, sizeof(dup_value)) ==
+                ESP_OK) {
+            allow_duplicate = (strcmp(dup_value, "allow") == 0);
+        }
+        if (!allow_duplicate) {
+            ESP_LOGI(TAG, "Upload is already in the album as %s - not stored", duplicate_of);
+            unlink(result.image_path);
+            if (result.has_thumbnail) {
+                unlink(result.thumbnail_path);
+            }
+            cJSON *dup_response = cJSON_CreateObject();
+            cJSON_AddStringToObject(dup_response, "status", "duplicate");
+            cJSON_AddStringToObject(dup_response, "existing", duplicate_of);
+            char *dup_json = cJSON_Print(dup_response);
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_status(req, "409 Conflict");
+            httpd_resp_sendstr(req, dup_json);
+            free(dup_json);
+            cJSON_Delete(dup_response);
+            return ESP_OK;
+        }
+    }
+#endif
+
     // Remove old files
     unlink(final_dest_path);
     unlink(final_thumb_path);
@@ -1017,22 +1097,51 @@ static esp_err_t upload_image_handler(httpd_req_t *req)
     if (rename(result.image_path, final_dest_path) != 0) {
         ESP_LOGE(TAG, "Failed to move image to album");
         unlink(result.image_path);
+#if FEATURE_MULTI_UPLOAD
+        if (result.has_thumbnail)
+            unlink(result.thumbnail_path);
+#else
         unlink(result.thumbnail_path);
+#endif
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to save image");
         return ESP_FAIL;
     }
 
     // Move thumbnail to final location
+#if FEATURE_MULTI_UPLOAD
+    if (!result.has_thumbnail) {
+        ESP_LOGI(TAG, "Image saved successfully: %s (no thumbnail)", dest_filename);
+    } else {
+        if (rename(result.thumbnail_path, final_thumb_path) != 0) {
+            ESP_LOGW(TAG, "Failed to move thumbnail");
+            unlink(result.thumbnail_path);
+        }
+        ESP_LOGI(TAG, "Image saved successfully: %s (thumbnail: %s)", dest_filename, jpg_filename);
+    }
+#else
     if (rename(result.thumbnail_path, final_thumb_path) != 0) {
         ESP_LOGW(TAG, "Failed to move thumbnail");
         unlink(result.thumbnail_path);
     }
 
     ESP_LOGI(TAG, "Image saved successfully: %s (thumbnail: %s)", dest_filename, jpg_filename);
+#endif
+
+#if FEATURE_UPLOAD_DEDUP
+    if (have_digest) {
+        dedup_service_record(album_path, dest_filename, &upload_digest);
+    }
+#endif
 
     cJSON *response = cJSON_CreateObject();
     cJSON_AddStringToObject(response, "status", "success");
     cJSON_AddStringToObject(response, "filepath", final_dest_path);
+#if FEATURE_UPLOAD_DEDUP
+    if (is_duplicate) {
+        // stored anyway (the warn mode, or "add it anyway"): say what it duplicates
+        cJSON_AddStringToObject(response, "duplicate_of", duplicate_of);
+    }
+#endif
 
     char *json_str = cJSON_Print(response);
     httpd_resp_set_type(req, "application/json");
@@ -1236,6 +1345,17 @@ static esp_err_t delete_image_handler(httpd_req_t *req)
 
     // Delete thumbnail (ignore errors if it doesn't exist)
     unlink(jpg_path);
+
+#if FEATURE_UPLOAD_DEDUP
+    {
+        const char *last_slash = strrchr(filepath, '/');
+        if (last_slash) {
+            char image_dir[512];
+            snprintf(image_dir, sizeof(image_dir), "%.*s", (int) (last_slash - filepath), filepath);
+            dedup_service_forget(image_dir, last_slash + 1);
+        }
+    }
+#endif
 
     ESP_LOGI(TAG, "Image deleted successfully: %s", filepath_copy);
 
@@ -2270,7 +2390,26 @@ static esp_err_t config_handler(httpd_req_t *req)
         else if (rm == ROTATION_MODE_TELEGRAM)
             rotation_mode_str = "telegram";
 #endif
+#if FEATURE_ARTWORKS
+        else if (rm == ROTATION_MODE_ARTWORKS)
+            rotation_mode_str = "artworks";
+#endif
         cJSON_AddStringToObject(root, "rotation_mode", rotation_mode_str);
+#if FEATURE_ARTWORKS
+        cJSON_AddNumberToObject(root, "art_types", config_manager_get_art_types());
+        cJSON_AddNumberToObject(root, "art_sources", config_manager_get_art_sources());
+        cJSON_AddBoolToObject(root, "art_save", config_manager_get_art_save());
+        cJSON_AddStringToObject(root, "art_album", config_manager_get_art_album());
+        cJSON_AddNumberToObject(root, "art_free_min", config_manager_get_art_free_min());
+        cJSON_AddNumberToObject(root, "art_free_target", config_manager_get_art_free_target());
+        cJSON_AddBoolToObject(root, "art_caption", config_manager_get_art_caption());
+        cJSON_AddStringToObject(root, "art_scale_mode",
+                                art_scale_name((art_scale_t) config_manager_get_art_scale()));
+        cJSON_AddBoolToObject(root, "art_match_orient", config_manager_get_art_match_orient());
+        // the key is write-only: only whether there is one
+        cJSON_AddBoolToObject(root, "art_si_key_configured",
+                              config_manager_get_art_si_key()[0] != '\0');
+#endif
 
         // Auto Rotate - SDCARD
         cJSON_AddStringToObject(root, "sd_rotation_mode",
@@ -2421,6 +2560,13 @@ static esp_err_t config_handler(httpd_req_t *req)
                                 config_manager_get_headlines_wrap_lines());
         cJSON_AddBoolToObject(root, "caption_invert_colors_enabled",
                               config_manager_get_caption_invert_colors_enabled());
+#if FEATURE_TEXT_OUTLINE
+        cJSON_AddStringToObject(
+            root, "overlay_text_style",
+            text_style_name((text_style_t) config_manager_get_overlay_text_style()));
+        cJSON_AddNumberToObject(root, "overlay_text_border",
+                                config_manager_get_overlay_text_border());
+#endif
         cJSON_AddBoolToObject(root, "weather_multiline_enabled",
                               config_manager_get_weather_multiline_enabled());
         cJSON_AddStringToObject(root, "weather_icon_set", config_manager_get_weather_icon_set());
@@ -2651,6 +2797,10 @@ static esp_err_t config_handler(httpd_req_t *req)
         cJSON_AddBoolToObject(root, "agenda_cal_e_enabled",
                               config_manager_get_agenda_cal_e_enabled());
         cJSON_AddStringToObject(root, "agenda_cal_e_name", config_manager_get_agenda_cal_e_name());
+#if FEATURE_SOURCE_AUTH
+        cJSON_AddBoolToObject(root, "source_auth_allow_http",
+                              config_manager_get_source_auth_allow_http());
+#endif
         cJSON *agenda_cron_arr = cJSON_CreateArray();
         int agenda_cron_count = config_manager_get_agenda_cron_rule_count();
         for (int i = 0; i < agenda_cron_count; i++) {
@@ -2661,6 +2811,139 @@ static esp_err_t config_handler(httpd_req_t *req)
         }
         cJSON_AddItemToObject(root, "agenda_cron", agenda_cron_arr);
 
+#endif
+#if FEATURE_INFO_SCREENS
+        {
+            cJSON *screens = cJSON_CreateArray();
+            uint32_t mask = config_manager_get_info_screens_mask();
+            for (int id = 0; id < INFO_SCREEN_COUNT; id++) {
+                if (((mask >> id) & 1u) && ((info_screens_compiled_mask() >> id) & 1u)) {
+                    cJSON_AddItemToArray(screens, cJSON_CreateString(info_screen_name(id)));
+                }
+            }
+            cJSON_AddItemToObject(root, "info_screens", screens);
+            cJSON *available = cJSON_CreateArray();
+            for (int id = 0; id < INFO_SCREEN_COUNT; id++) {
+                if ((info_screens_compiled_mask() >> id) & 1u) {
+                    cJSON_AddItemToArray(available, cJSON_CreateString(info_screen_name(id)));
+                }
+            }
+            cJSON_AddItemToObject(root, "info_screens_available", available);
+#if FEATURE_SCHEDULE_PAGES
+            // per agenda schedule (same order as agenda_cron): the pages it draws (empty = the
+            // shared rotation) and its hold in minutes (0 = the common gap)
+            cJSON *schedule_pages = cJSON_CreateArray();
+            cJSON *schedule_holds = cJSON_CreateArray();
+            for (int i = 0; i < config_manager_get_agenda_cron_rule_count(); i++) {
+                cJSON *names = cJSON_CreateArray();
+                for (int id = 0; id < INFO_SCREEN_COUNT; id++) {
+                    if (((config_manager_get_sched_mask(i) >> id) & 1u) &&
+                        ((info_screens_compiled_mask() >> id) & 1u)) {
+                        cJSON_AddItemToArray(names, cJSON_CreateString(info_screen_name(id)));
+                    }
+                }
+                cJSON_AddItemToArray(schedule_pages, names);
+                cJSON_AddItemToArray(schedule_holds,
+                                     cJSON_CreateNumber(config_manager_get_sched_hold(i)));
+            }
+            cJSON_AddItemToObject(root, "agenda_cron_pages", schedule_pages);
+            cJSON_AddItemToObject(root, "agenda_cron_hold", schedule_holds);
+            cJSON_AddNumberToObject(root, "agenda_gap_min", config_manager_get_sched_gap());
+#endif
+#if FEATURE_CHORE_WHEEL
+            cJSON_AddStringToObject(root, "chore_members", config_manager_get_chore_members());
+            cJSON_AddStringToObject(root, "chore_tasks", config_manager_get_chore_tasks());
+#endif
+#if FEATURE_FINANCE_SNAPSHOT
+            cJSON_AddStringToObject(root, "fx_currencies", config_manager_get_fx_currencies());
+#endif
+#if FEATURE_FUEL_PRICES
+            cJSON_AddStringToObject(root, "fuel_type",
+                                    fuel_type_name((fuel_type_t) config_manager_get_fuel_type()));
+            cJSON_AddNumberToObject(root, "fuel_radius_km", config_manager_get_fuel_radius_km());
+            cJSON_AddNumberToObject(root, "fuel_count", config_manager_get_fuel_count());
+            cJSON_AddBoolToObject(root, "fuel_hide_closed", config_manager_get_fuel_hide_closed());
+            // the key itself is write-only: only whether there is one
+            cJSON_AddBoolToObject(root, "fuel_api_key_configured",
+                                  config_manager_get_fuel_api_key()[0] != '\0');
+#endif
+#if FEATURE_ROUTE_TIME
+            // the travel time on the fuel page: the places (the Web UI shows what was taken over;
+            // the export leaves them out unless it includes credentials), never the coordinates,
+            // and whether there is a key - the keys themselves are write-only
+            cJSON_AddBoolToObject(root, "route_enabled", config_manager_get_route_enabled());
+            cJSON_AddStringToObject(root, "route_from", config_manager_get_route_text(0));
+            cJSON_AddStringToObject(root, "route_to", config_manager_get_route_text(1));
+            cJSON_AddStringToObject(root, "route_from_found", config_manager_get_route_found(0));
+            cJSON_AddStringToObject(root, "route_to_found", config_manager_get_route_found(1));
+            cJSON_AddBoolToObject(root, "route_checked", config_manager_get_route_checked());
+            cJSON_AddNumberToObject(root, "route_ref_there_min", config_manager_get_route_ref(0));
+            cJSON_AddNumberToObject(root, "route_ref_back_min", config_manager_get_route_ref(1));
+            cJSON_AddNumberToObject(root, "route_percent", config_manager_get_route_percent());
+            cJSON_AddNumberToObject(root, "route_min_excess_min",
+                                    config_manager_get_route_min_excess());
+            cJSON_AddStringToObject(root, "route_label", config_manager_get_route_label());
+            cJSON_AddBoolToObject(root, "route_key_tomtom_configured",
+                                  config_manager_get_route_key_tomtom()[0] != '\0');
+            cJSON_AddBoolToObject(root, "route_key_here_configured",
+                                  config_manager_get_route_key_here()[0] != '\0');
+#endif
+#if FEATURE_RECIPES
+            {
+                // the recipe page: what the user chose, by the names of recipe_source.h (the Web
+                // UI offers the same lists); the key of TheMealDB is write-only
+                recipe_options_t recipe_options;
+                config_manager_get_recipe_options(&recipe_options);
+                cJSON_AddStringToObject(root, "recipe_source",
+                                        RECIPE_SOURCE_NAMES[recipe_options.source]);
+                cJSON_AddStringToObject(root, "recipe_variant",
+                                        RECIPE_VARIANTS[recipe_options.variant]);
+                cJSON_AddStringToObject(root, "recipe_query", recipe_options.query);
+                cJSON_AddStringToObject(root, "recipe_property",
+                                        RECIPE_PROPERTIES[recipe_options.property]);
+                cJSON_AddStringToObject(root, "recipe_health",
+                                        RECIPE_HEALTH[recipe_options.health]);
+                cJSON_AddStringToObject(root, "recipe_category",
+                                        RECIPE_CATEGORIES[recipe_options.category]);
+                cJSON_AddStringToObject(root, "recipe_country",
+                                        RECIPE_COUNTRIES[recipe_options.country]);
+                cJSON_AddStringToObject(root, "recipe_meal", RECIPE_MEALS[recipe_options.meal]);
+                cJSON_AddNumberToObject(root, "recipe_max_minutes",
+                                        RECIPE_MAX_MINUTES[recipe_options.max_time]);
+                cJSON_AddNumberToObject(root, "recipe_min_rating",
+                                        RECIPE_MIN_RATINGS[recipe_options.min_rating]);
+                cJSON_AddStringToObject(root, "recipe_sort", RECIPE_SORTS[recipe_options.sort]);
+                cJSON_AddStringToObject(root, "recipe_mealdb_category",
+                                        RECIPE_MEALDB_CATEGORIES[recipe_options.mealdb_category]);
+                cJSON_AddBoolToObject(root, "recipe_image", recipe_options.image);
+                cJSON_AddBoolToObject(root, "recipe_qr", recipe_options.qr);
+                cJSON_AddBoolToObject(root, "recipe_mealdb_key_configured",
+                                      config_manager_get_recipe_mealdb_key()[0] != '\0');
+            }
+#endif
+#if FEATURE_MARKET_QUOTES
+            cJSON_AddStringToObject(root, "market_symbols", config_manager_get_market_symbols());
+            cJSON_AddBoolToObject(root, "market_yahoo", config_manager_get_market_yahoo());
+            // the keys are write-only: only whether there is one
+            cJSON_AddBoolToObject(root, "market_key_twelvedata_configured",
+                                  config_manager_get_market_key_twelvedata()[0] != '\0');
+            cJSON_AddBoolToObject(root, "market_key_alphavantage_configured",
+                                  config_manager_get_market_key_alphavantage()[0] != '\0');
+#endif
+        }
+#endif
+#if FEATURE_UPLOAD_DEDUP
+        {
+            static const char *const dedup_mode_names[] = {"off", "skip", "warn"};
+            int dedup_mode = config_manager_get_dedup_mode();
+            cJSON_AddStringToObject(
+                root, "dedup_mode",
+                dedup_mode_names[(dedup_mode >= 0 && dedup_mode <= 2) ? dedup_mode : 1]);
+            cJSON_AddStringToObject(root, "dedup_hash",
+                                    config_manager_get_dedup_hash() == 1 ? "payload" : "stored");
+            cJSON_AddBoolToObject(root, "dedup_index_existing",
+                                  config_manager_get_dedup_index_existing());
+        }
 #endif
 #if FEATURE_ALARMCLOCK
         // Alarm Clock - always reported (not just on a build compiled with
@@ -2869,6 +3152,25 @@ static esp_err_t config_urls_handler(httpd_req_t *req)
     cJSON_AddStringToObject(root, "telegram_bot_token", config_manager_get_telegram_bot_token());
     cJSON_AddStringToObject(root, "telegram_chat_id", config_manager_get_telegram_chat_id());
 #endif
+#if FEATURE_FUEL_PRICES
+    cJSON_AddStringToObject(root, "fuel_api_key", config_manager_get_fuel_api_key());
+#endif
+#if FEATURE_MARKET_QUOTES
+    cJSON_AddStringToObject(root, "market_key_twelvedata",
+                            config_manager_get_market_key_twelvedata());
+    cJSON_AddStringToObject(root, "market_key_alphavantage",
+                            config_manager_get_market_key_alphavantage());
+#endif
+#if FEATURE_ARTWORKS
+    cJSON_AddStringToObject(root, "art_si_key", config_manager_get_art_si_key());
+#endif
+#if FEATURE_ROUTE_TIME
+    cJSON_AddStringToObject(root, "route_key_tomtom", config_manager_get_route_key_tomtom());
+    cJSON_AddStringToObject(root, "route_key_here", config_manager_get_route_key_here());
+#endif
+#if FEATURE_RECIPES
+    cJSON_AddStringToObject(root, "recipe_mealdb_key", config_manager_get_recipe_mealdb_key());
+#endif
 
     char *json_str = cJSON_Print(root);
     httpd_resp_set_type(req, "application/json");
@@ -2879,6 +3181,339 @@ static esp_err_t config_urls_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+#endif
+#if FEATURE_ROUTE_TIME
+// The body of a POST as JSON (at most 2 KB); NULL after an answer has been sent.
+static cJSON *route_read_body(httpd_req_t *req)
+{
+    if (req->content_len == 0 || req->content_len > 2048) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad request size");
+        return NULL;
+    }
+    char *buf = malloc(req->content_len + 1);
+    if (!buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
+        return NULL;
+    }
+    size_t got = 0;
+    while (got < req->content_len) {
+        int n = httpd_req_recv(req, buf + got, req->content_len - got);
+        if (n <= 0) {
+            free(buf);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Failed to read request");
+            return NULL;
+        }
+        got += (size_t) n;
+    }
+    buf[got] = '\0';
+    cJSON *root = cJSON_Parse(buf);
+    free(buf);
+    if (!root) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+    }
+    return root;
+}
+
+static void route_send_json(httpd_req_t *req, cJSON *answer)
+{
+    char *text = cJSON_PrintUnformatted(answer);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, text ? text : "{\"status\":\"failed\"}");
+    free(text);
+    cJSON_Delete(answer);
+}
+
+// A place of the Web UI: {"label", "lat", "lon", "level"}; false if it is not one.
+static bool route_read_place(const cJSON *object, route_place_t *out)
+{
+    const cJSON *label = cJSON_GetObjectItem(object, "label");
+    const cJSON *lat = cJSON_GetObjectItem(object, "lat");
+    const cJSON *lon = cJSON_GetObjectItem(object, "lon");
+    const cJSON *level = cJSON_GetObjectItem(object, "level");
+    if (!cJSON_IsString(label) || !cJSON_IsNumber(lat) || !cJSON_IsNumber(lon) ||
+        !cJSON_IsNumber(level) || lat->valuedouble < -90.0 || lat->valuedouble > 90.0 ||
+        lon->valuedouble < -180.0 || lon->valuedouble > 180.0) {
+        return false;
+    }
+    memset(out, 0, sizeof(*out));
+    snprintf(out->label, sizeof(out->label), "%.*s", (int) sizeof(out->label) - 1,
+             label->valuestring);
+    out->lat = lat->valuedouble;
+    out->lon = lon->valuedouble;
+    out->level = level->valueint;
+    return true;
+}
+
+// POST {"text": "an address"}: the places it can be - addresses or streets, best match first -
+// {"status": "ok", "source": "TomTom", "places": [{"label", "lat", "lon", "level", "score"}]}, or a
+// status with the provider's words in "message". The Web UI shows the list; nothing is stored.
+static esp_err_t route_geocode_handler(httpd_req_t *req)
+{
+    cJSON *body = route_read_body(req);
+    if (!body) {
+        return ESP_FAIL;
+    }
+    const cJSON *text = cJSON_GetObjectItem(body, "text");
+    route_place_t places[ROUTE_CANDIDATES_MAX];
+    int count = 0;
+    char source[12] = "", message[96] = "";
+    route_status_t status = ROUTE_STATUS_NOT_FOUND;
+    if (cJSON_IsString(text) && strlen(text->valuestring) < ROUTE_TEXT_MAX) {
+        status = route_service_geocode(text->valuestring, places, ROUTE_CANDIDATES_MAX, &count,
+                                       source, sizeof(source), message, sizeof(message));
+    }
+    cJSON_Delete(body);
+    cJSON *answer = cJSON_CreateObject();
+    cJSON_AddStringToObject(answer, "status", route_status_name(status));
+    if (status == ROUTE_STATUS_OK) {
+        cJSON_AddStringToObject(answer, "source", source);
+        cJSON *list = cJSON_AddArrayToObject(answer, "places");
+        for (int i = 0; i < count; i++) {
+            cJSON *place = cJSON_CreateObject();
+            cJSON_AddStringToObject(place, "label", places[i].label);
+            cJSON_AddNumberToObject(place, "lat", places[i].lat);
+            cJSON_AddNumberToObject(place, "lon", places[i].lon);
+            cJSON_AddNumberToObject(place, "level", places[i].level);
+            cJSON_AddNumberToObject(place, "score", places[i].score);
+            cJSON_AddItemToArray(list, place);
+        }
+    } else {
+        cJSON_AddStringToObject(answer, "message", message);
+    }
+    route_send_json(req, answer);
+    return ESP_OK;
+}
+
+// POST {"from_text", "from": {place}, "to_text", "to": {place}}: takes the two places the user
+// chose over - only if the route between them can be calculated both ways and is plausible. Answers
+// {"status": "ok", "source", "there_min", "back_min", "free_there_min", "free_back_min"} (the
+// free-flow times are 0 if the provider does not tell them), or a status with the provider's words.
+static esp_err_t route_check_handler(httpd_req_t *req)
+{
+    cJSON *body = route_read_body(req);
+    if (!body) {
+        return ESP_FAIL;
+    }
+    const cJSON *from_text = cJSON_GetObjectItem(body, "from_text");
+    const cJSON *to_text = cJSON_GetObjectItem(body, "to_text");
+    route_place_t from, to;
+    route_times_t times;
+    memset(&times, 0, sizeof(times));
+    route_status_t status = ROUTE_STATUS_NO_PLACES;
+    if (cJSON_IsString(from_text) && cJSON_IsString(to_text) &&
+        strlen(from_text->valuestring) < ROUTE_TEXT_MAX &&
+        strlen(to_text->valuestring) < ROUTE_TEXT_MAX &&
+        route_read_place(cJSON_GetObjectItem(body, "from"), &from) &&
+        route_read_place(cJSON_GetObjectItem(body, "to"), &to)) {
+        status =
+            route_service_check(from_text->valuestring, &from, to_text->valuestring, &to, &times);
+    }
+    cJSON_Delete(body);
+    cJSON *answer = cJSON_CreateObject();
+    cJSON_AddStringToObject(answer, "status", route_status_name(status));
+    if (status == ROUTE_STATUS_OK) {
+        cJSON_AddStringToObject(answer, "source", times.source);
+        cJSON_AddNumberToObject(answer, "there_min", route_minutes(times.there.seconds));
+        cJSON_AddNumberToObject(answer, "back_min", route_minutes(times.back.seconds));
+        cJSON_AddNumberToObject(
+            answer, "free_there_min",
+            times.there.free_seconds > 0 ? route_minutes(times.there.free_seconds) : 0);
+        cJSON_AddNumberToObject(
+            answer, "free_back_min",
+            times.back.free_seconds > 0 ? route_minutes(times.back.free_seconds) : 0);
+    } else {
+        cJSON_AddStringToObject(answer, "message", times.message);
+    }
+    route_send_json(req, answer);
+    return ESP_OK;
+}
+#endif
+#if FEATURE_FACT_OF_THE_DAY
+// The user's own facts (fact_service.h): the pack as plain text, read and replaced by the Web UI.
+static esp_err_t facts_get_handler(httpd_req_t *req)
+{
+    char *text = NULL;
+    size_t len = 0;
+    esp_err_t err = fact_service_load(&text, &len);
+    httpd_resp_set_type(req, "text/plain; charset=utf-8");
+    httpd_resp_send(req, err == ESP_OK ? text : "", err == ESP_OK ? (ssize_t) len : 0);
+    free(text);
+    return ESP_OK;
+}
+
+static esp_err_t facts_put_handler(httpd_req_t *req)
+{
+    if (!system_ready) {
+        httpd_resp_set_status(req, HTTPD_503);
+        httpd_resp_sendstr(req, "System is still initializing");
+        return ESP_FAIL;
+    }
+    if (!storage_has_persistent_storage()) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Storage not found");
+        return ESP_FAIL;
+    }
+    if (req->content_len > FACT_PACK_MAX_BYTES) {
+        // Read and drop what the client is still sending (up to 64 KB), or it sees the connection
+        // reset before it can read the answer.
+        char sink[256];
+        size_t left = req->content_len < 65536 ? req->content_len : 65536;
+        while (left > 0) {
+            int n = httpd_req_recv(req, sink, left < sizeof(sink) ? left : sizeof(sink));
+            if (n <= 0) {
+                break;
+            }
+            left -= (size_t) n;
+        }
+        httpd_resp_set_status(req, "413 Payload Too Large");
+        httpd_resp_sendstr(req, "The fact list is too long (16 KB at most)");
+        return ESP_FAIL;
+    }
+    size_t total = req->content_len;
+    char *body = malloc(total + 1);
+    fact_t *facts = heap_caps_malloc(sizeof(fact_t) * FACT_MAX, MALLOC_CAP_SPIRAM);
+    if (!body || !facts) {
+        free(body);
+        heap_caps_free(facts);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
+        return ESP_FAIL;
+    }
+    size_t got = 0;
+    while (got < total) {
+        int n = httpd_req_recv(req, body + got, total - got);
+        if (n <= 0) {
+            free(body);
+            heap_caps_free(facts);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Could not read the request");
+            return ESP_FAIL;
+        }
+        got += (size_t) n;
+    }
+    body[got] = '\0';
+    int skipped = 0;
+    int count = fact_pack_parse(body, facts, FACT_MAX, &skipped);
+    heap_caps_free(facts);
+    if (got > 0 && count == 0) {
+        free(body);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No usable line (one fact per line)");
+        return ESP_FAIL;
+    }
+    esp_err_t err = fact_service_store(body, got);
+    free(body);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Could not save the facts");
+        return ESP_FAIL;
+    }
+    char reply[64];
+    snprintf(reply, sizeof(reply), "{\"facts\":%d,\"skipped\":%d}", count, skipped);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, reply);
+    return ESP_OK;
+}
+#endif
+#if FEATURE_UPLOAD_DEDUP
+// Duplicate detection (dedup_service.h): the duplicates of an album, and the background indexing of
+// the images that were there before.
+static bool dedup_request_ok(httpd_req_t *req)
+{
+    if (!system_ready) {
+        httpd_resp_set_status(req, HTTPD_503);
+        httpd_resp_sendstr(req, "System is still initializing");
+        return false;
+    }
+    if (!storage_has_persistent_storage()) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Storage not found");
+        return false;
+    }
+    return true;
+}
+
+// An album name from the request: not empty (unless `allow_empty`), no path parts.
+static bool dedup_album_valid(const char *album, bool allow_empty)
+{
+    if (album[0] == '\0') {
+        return allow_empty;
+    }
+    return is_path_safe(album) && strchr(album, '/') == NULL && strchr(album, '\\') == NULL;
+}
+
+static esp_err_t dedup_duplicates_handler(httpd_req_t *req)
+{
+    if (!dedup_request_ok(req)) {
+        return ESP_FAIL;
+    }
+    char query[256], album_param[128], album[128];
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
+        httpd_query_key_value(query, "album", album_param, sizeof(album_param)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing album");
+        return ESP_FAIL;
+    }
+    url_decode(album, album_param, sizeof(album));
+    if (!dedup_album_valid(album, false)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid album");
+        return ESP_FAIL;
+    }
+    char *json = dedup_service_report_json(album);
+    if (!json) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Unknown album");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json);
+    free(json);
+    return ESP_OK;
+}
+
+static esp_err_t dedup_scan_handler(httpd_req_t *req)
+{
+    if (!dedup_request_ok(req)) {
+        return ESP_FAIL;
+    }
+    char album[128] = "";
+    char body[192];
+    int received = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (received > 0) {
+        body[received] = '\0';
+        cJSON *root = cJSON_Parse(body);
+        cJSON *item = root ? cJSON_GetObjectItem(root, "album") : NULL;
+        if (item && cJSON_IsString(item)) {
+            snprintf(album, sizeof(album), "%s", cJSON_GetStringValue(item));
+        }
+        cJSON_Delete(root);
+    }
+    if (!dedup_album_valid(album, true)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid album");
+        return ESP_FAIL;
+    }
+    esp_err_t err = dedup_service_scan_start(album);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Could not start the indexing");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json");
+    if (err == ESP_ERR_INVALID_STATE) {
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_sendstr(req, "{\"status\":\"running\"}");
+    } else {
+        httpd_resp_sendstr(req, "{\"status\":\"started\"}");
+    }
+    return ESP_OK;
+}
+
+static esp_err_t dedup_status_handler(httpd_req_t *req)
+{
+    if (!dedup_request_ok(req)) {
+        return ESP_FAIL;
+    }
+    char *json = dedup_service_status_json();
+    if (!json) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json);
+    free(json);
+    return ESP_OK;
+}
 #endif
 static esp_err_t albums_handler(httpd_req_t *req)
 {
@@ -4378,6 +5013,10 @@ static void register_all_handlers(httpd_handle_t handle)
     register_uri(handle, "/api/config", HTTP_PATCH, config_handler);
 #if FEATURE_AGENDA
     register_uri(handle, "/api/config/urls", HTTP_GET, config_urls_handler);
+#if FEATURE_ROUTE_TIME
+    register_uri(handle, "/api/route/geocode", HTTP_POST, route_geocode_handler);
+    register_uri(handle, "/api/route/check", HTTP_POST, route_check_handler);
+#endif
 #endif
     register_uri(handle, "/api/debug/log", HTTP_GET, debug_log_download_handler);
     register_uri(handle, "/api/debug/log", HTTP_DELETE, debug_log_clear_handler);
@@ -4462,6 +5101,15 @@ static void register_all_handlers(httpd_handle_t handle)
 #endif
 #if FEATURE_CHIMES
     register_uri(handle, "/api/chimes/test", HTTP_POST, chime_test_handler);
+#endif
+#if FEATURE_UPLOAD_DEDUP
+    register_uri(handle, "/api/dedup/duplicates", HTTP_GET, dedup_duplicates_handler);
+    register_uri(handle, "/api/dedup/scan", HTTP_POST, dedup_scan_handler);
+    register_uri(handle, "/api/dedup/status", HTTP_GET, dedup_status_handler);
+#endif
+#if FEATURE_FACT_OF_THE_DAY
+    register_uri(handle, "/api/facts", HTTP_GET, facts_get_handler);
+    register_uri(handle, "/api/facts", HTTP_PUT, facts_put_handler);
 #endif
 #if FEATURE_AGENDA
     register_uri(handle, "/api/agenda/extra-ics", HTTP_POST, agenda_extra_ics_upload_handler);
@@ -4675,4 +5323,9 @@ void http_server_set_ready(void)
 {
     system_ready = true;
     ESP_LOGI(TAG, "System marked as ready for HTTP requests");
+#if FEATURE_UPLOAD_DEDUP
+    if (config_manager_get_dedup_index_existing()) {
+        dedup_service_scan_start(NULL);  // index what the album index does not know yet
+    }
+#endif
 }

@@ -12,7 +12,8 @@
 typedef enum {
     ROTATION_MODE_STORAGE = 0,
     ROTATION_MODE_URL = 1,
-    ROTATION_MODE_TELEGRAM = 2
+    ROTATION_MODE_TELEGRAM = 2,
+    ROTATION_MODE_ARTWORKS = 3
 } rotation_mode_t;
 #else
 typedef enum { ROTATION_MODE_STORAGE = 0, ROTATION_MODE_URL = 1 } rotation_mode_t;
@@ -641,6 +642,13 @@ typedef enum {
 // look of every Telegram caption too. Off by default (fixed black
 // bar/white text, as before this setting existed).
 #define NVS_CAPTION_INVERT_COLORS_KEY "cap_invert_col"
+#if FEATURE_TEXT_OUTLINE
+// text-outline feature: how the overlay lines and the captions are drawn (text_outline.h) - the
+// style (0 = the bar, the default; 1 = white text with a black border; 2 = black text with a white
+// border) and the width of the border in pixels (1 or 2, default 2)
+#define NVS_OVERLAY_TEXT_STYLE_KEY "ovl_txt_style"
+#define NVS_OVERLAY_TEXT_BORDER_KEY "ovl_txt_bord"
+#endif
 
 // Falls back to the photo's own EXIF "DateTimeOriginal" (capture date) as a
 // caption, for a Telegram photo received with no caption text. Off by
@@ -880,6 +888,93 @@ typedef enum {
 #define NVS_AGENDA_CAL_E_NAME_KEY "agenda_cal_e_nm"
 #define AGENDA_CAL_CDE_NAME_MAX_LEN 24
 
+// source-auth feature: whether the login in a calendar/ToDo URL (https://user:password@host/...)
+// may also be sent over plain http:// (default no, see source_auth.h).
+#define NVS_SOURCE_AUTH_HTTP_KEY "src_auth_http"
+
+// upload-dedup feature: what to do with an upload the album already has (0 off, 1 skip, 2 warn),
+// what is compared (0 the stored bytes, 1 the decoded pixels), and whether files that were there
+// before the feature are indexed in the background.
+#define NVS_DEDUP_MODE_KEY "dedup_mode"
+#define NVS_DEDUP_HASH_KEY "dedup_hash"
+#define NVS_DEDUP_INDEX_KEY "dedup_index"
+
+// info-screens feature: which screens take part in the rotation (a bit mask, bit 0 = the agenda),
+// how many have been shown (the rotation counter), and the lists of the chore wheel.
+#define NVS_INFO_SCREENS_KEY "info_screens"
+#define NVS_INFO_ROTATION_KEY "info_rot"
+// schedule-pages feature: per Agenda schedule (rule) the pages it draws ("mask:hold" per rule, the
+// mask in the bits of the info screens, the hold in minutes, 0 = the common gap), the common
+// minimum time between two displays, and a rotation counter per schedule ("n,n,n")
+#define NVS_SCHED_PAGES_KEY "sp_pages"
+#define NVS_SCHED_GAP_KEY "sp_gap"
+#define NVS_SCHED_ROT_KEY "sp_rot"
+#define SCHED_GAP_DEFAULT_MIN 15
+#define SCHED_GAP_MAX_MIN 240
+#define NVS_CHORE_MEMBERS_KEY "chore_members"
+#define NVS_CHORE_TASKS_KEY "chore_tasks"
+// finance-snapshot feature: the currencies of the exchange-rate page, as typed ("USD, GBP")
+#define NVS_FX_CODES_KEY "fx_codes"
+// fuel-prices feature: the personal API key (write-only, a credential), fuel type (0 E5, 1 E10,
+// 2 diesel), search radius in km, number of stations and whether closed ones are left out
+#define NVS_FUEL_API_KEY "fuel_key"
+#define NVS_FUEL_TYPE_KEY "fuel_type"
+#define NVS_FUEL_RADIUS_KEY "fuel_rad"
+#define NVS_FUEL_COUNT_KEY "fuel_cnt"
+#define NVS_FUEL_HIDE_CLOSED_KEY "fuel_hide"
+#define FUEL_API_KEY_MAX_LEN 65
+// route-time feature: whether the travel time is shown, the two places (the text as typed, the
+// place the provider found for it, its coordinates "lat,lon"), whether both were taken over and the
+// route between them calculated, the usual time there and back in minutes, the limits of a time
+// that is too long (percent, minutes), the label the display shows, and the personal keys of TomTom
+// and HERE (write-only credentials)
+#define NVS_ROUTE_ON_KEY "route_on"
+#define NVS_ROUTE_FROM_KEY "route_from"
+#define NVS_ROUTE_TO_KEY "route_to"
+#define NVS_ROUTE_FROM_FND_KEY "route_from_fnd"
+#define NVS_ROUTE_TO_FND_KEY "route_to_fnd"
+#define NVS_ROUTE_FROM_LL_KEY "route_from_ll"
+#define NVS_ROUTE_TO_LL_KEY "route_to_ll"
+#define NVS_ROUTE_CHK_KEY "route_chk"
+#define NVS_ROUTE_REF_A_KEY "route_ref_a"
+#define NVS_ROUTE_REF_B_KEY "route_ref_b"
+#define NVS_ROUTE_PCT_KEY "route_pct"
+#define NVS_ROUTE_EXC_KEY "route_exc"
+#define NVS_ROUTE_LBL_KEY "route_lbl"
+#define NVS_ROUTE_KEY_TT_KEY "route_k_tt"
+#define NVS_ROUTE_KEY_HERE_KEY "route_k_here"
+#define ROUTE_PERCENT_DEFAULT 10
+#define ROUTE_MIN_EXCESS_DEFAULT 5
+#define ROUTE_LABEL_MAX_LEN 11
+
+// recipes feature: what the recipe page shows (one short text of "key=value" fields, see
+// recipe_source.h), the personal key of TheMealDB (a write-only credential), and three small files:
+// the last recipe that was shown (so a failed fetch can show it again), its picture as it was
+// downloaded, and the ids of the recipes shown lately
+#define NVS_RECIPE_OPTS_KEY "recipe_opts"
+#define NVS_RECIPE_MKEY_KEY "recipe_mkey"
+#define RECIPE_MEALDB_KEY_MAX_LEN 25
+#define RECIPE_LAST_PATH FS_MOUNT_POINT "/.recipe_last.bin"
+#define RECIPE_PHOTO_PATH FS_MOUNT_POINT "/.recipe_last.jpg"
+#define RECIPE_SEEN_PATH FS_MOUNT_POINT "/.recipe_seen.txt"
+#define ROUTE_KEY_MAX_LEN 105
+// market-quotes feature: the symbols of the markets page as typed, whether Yahoo Finance may be
+// used (default on), the personal keys of Twelve Data and Alpha Vantage (write-only credentials),
+// and the requests made today per source ("day,yahoo,twelvedata,alphavantage"); the last good
+// answers are kept in a text file on the storage
+#define NVS_MARKET_SYMBOLS_KEY "mkt_symbols"
+#define NVS_MARKET_YAHOO_KEY "mkt_yahoo"
+#define NVS_MARKET_TD_KEY "mkt_key_td"
+#define NVS_MARKET_AV_KEY "mkt_key_av"
+#define NVS_MARKET_QUOTA_KEY "mkt_quota"
+#define MARKET_API_KEY_MAX_LEN 65
+#define MARKET_QUOTA_TEXT_MAX_LEN 48
+#define MARKET_CACHE_PATH FS_MOUNT_POINT "/.markets.txt"
+#define INFO_LIST_MAX_LEN 160
+#define INFO_SCREEN_OUTPUT_PATH FS_MOUNT_POINT "/.screen.png"
+// fact-of-the-day feature: the user's own facts, one per line (fact_pack.h)
+#define FACT_PACK_PATH FS_MOUNT_POINT "/facts.txt"
+
 // User-authored Calendar-view color profiles (see agenda_color_profile.h),
 // imported via the Web UI as JSON exported by the companion browser tool
 // "profile-editor.html". Up to AGENDA_COLOR_PROFILE_SLOTS profiles can be
@@ -1054,6 +1149,30 @@ typedef enum {
 #define ALARM_RAMP_DEFAULT_SEC 0  // 0 = no ramp, full volume at once
 #define ALARM_RAMP_MAX_SEC 120    // 2 minutes: longer than a gentle wake-up needs
 #define ALARM_TUNE_MAX_INDEX 5    // alarm_pattern.h: ALARM_TUNE_COUNT - 1
+#endif
+
+#if FEATURE_ARTWORKS
+// artworks feature: the kinds of work that may be shown (bit 0 painting, 1 drawing, 2 print) and
+// the sources that may be asked (bit 0 Rijksmuseum, 1 SMK, 2 Smithsonian), the Smithsonian key
+// (empty = the public DEMO_KEY; a write-only credential), whether the pictures are kept in an album
+// and its name, the free space to keep and the free space to clean up to (percent of the storage),
+// the caption, how a picture is put on the panel (fit or cover, art_select.h), whether pictures of
+// the frame's orientation are preferred, and the counter that tells which saved picture is the
+// oldest
+#define NVS_ART_TYPES_KEY "art_types"
+#define NVS_ART_SOURCES_KEY "art_sources"
+#define NVS_ART_SI_KEY "art_si_key"
+#define NVS_ART_SAVE_KEY "art_save"
+#define NVS_ART_ALBUM_KEY "art_album"
+#define NVS_ART_FREE_MIN_KEY "art_free_min"
+#define NVS_ART_FREE_TO_KEY "art_free_to"
+#define NVS_ART_CAPTION_KEY "art_caption"
+#define NVS_ART_SCALE_KEY "art_scale"
+#define NVS_ART_ORIENT_KEY "art_orient"
+#define NVS_ART_SEQ_KEY "art_seq"
+#define ART_SI_KEY_MAX_LEN 65
+#define ART_ALBUM_NAME_MAX_LEN 32
+#define ART_ALBUM_DEFAULT "Art"
 #endif
 
 #endif

@@ -132,6 +132,151 @@ FEATURES = (
         "Face-aware crop sidecars and Cover/Fit image variants",
     ),
     Feature(
+        "webcal",
+        "FEATURE_WEBCAL",
+        (),
+        ("agenda",),
+        "webcal:// subscription links for the Agenda calendars",
+    ),
+    Feature(
+        "source-auth",
+        "FEATURE_SOURCE_AUTH",
+        (),
+        ("agenda",),
+        "Login (user:password@) in the Agenda calendar and ToDo URLs, Basic/Digest",
+    ),
+    Feature(
+        "caldav",
+        "FEATURE_CALDAV",
+        (),
+        ("source-auth",),
+        "CalDAV calendars (caldavs://): the server sends only the coming days, repeats expanded",
+    ),
+    Feature(
+        "caldav-todo",
+        "FEATURE_CALDAV_TODO",
+        (),
+        ("caldav",),
+        "CalDAV task lists (caldavs:// as the ToDo address): open to-dos in the ToDo column",
+    ),
+    Feature(
+        "agenda-rrule",
+        "FEATURE_AGENDA_RRULE",
+        (),
+        ("agenda",),
+        "All of RFC 5545's recurrence rules in the Agenda calendars (monthly, yearly, BYDAY lists, "
+        "BYSETPOS, ...) through libical",
+    ),
+    Feature(
+        "upload-dedup",
+        "FEATURE_UPLOAD_DEDUP",
+        (),
+        (),
+        "Duplicate detection at upload: MD5 index per album, skip or warn, report",
+    ),
+    Feature(
+        "glyphs",
+        "FEATURE_GLYPHS",
+        (),
+        (),
+        "Real glyphs for the umlauts, the sharp s, the degree and the euro sign in on-display text",
+    ),
+    Feature(
+        "info-screens",
+        "FEATURE_INFO_SCREENS",
+        (),
+        ("agenda", "glyphs"),
+        "Full-screen information pages in the Agenda's rotation (the base of chore wheel, ...)",
+    ),
+    Feature(
+        "chore-wheel",
+        "FEATURE_CHORE_WHEEL",
+        (),
+        ("info-screens",),
+        "Chore wheel: who does which chore this week, with a donut wheel and cards",
+    ),
+    Feature(
+        "weather-screen",
+        "FEATURE_WEATHER_SCREEN",
+        (),
+        ("info-screens", "overlays"),
+        "Weather page: today with a big icon and temperature, and the next four days",
+    ),
+    Feature(
+        "fact-of-the-day",
+        "FEATURE_FACT_OF_THE_DAY",
+        (),
+        ("info-screens",),
+        "Fact-of-the-day page: a built-in or your own fact, a new one every day",
+    ),
+    Feature(
+        "finance-snapshot",
+        "FEATURE_FINANCE_SNAPSHOT",
+        (),
+        ("info-screens",),
+        "Exchange-rate page: ECB reference rates of up to four currencies with a 30-day sparkline",
+    ),
+    Feature(
+        "fuel-prices",
+        "FEATURE_FUEL_PRICES",
+        (),
+        ("info-screens", "overlays"),
+        "Fuel-price page: the cheapest petrol stations around a place (Germany, Tankerkoenig key)",
+    ),
+    Feature(
+        "market-quotes",
+        "FEATURE_MARKET_QUOTES",
+        (),
+        ("info-screens",),
+        "Markets page: stocks, ETFs, indices, crypto and currency pairs with a 30-day line (Yahoo, "
+        "Twelve Data, Alpha Vantage as fallbacks)",
+    ),
+    Feature(
+        "route-time",
+        "FEATURE_ROUTE_TIME",
+        (),
+        ("fuel-prices",),
+        "Travel time there and back between two addresses on the fuel page, with the traffic of now "
+        "(TomTom, HERE), red when it is longer than usual",
+    ),
+    Feature(
+        "artworks",
+        "FEATURE_ARTWORKS",
+        (),
+        ("overlays",),
+        "Artworks rotation mode: a painting, drawing or print from the Rijksmuseum, SMK or the "
+        "Smithsonian per rotation, kept in an album for offline wakes, with a small caption",
+    ),
+    Feature(
+        "schedule-pages",
+        "FEATURE_SCHEDULE_PAGES",
+        (),
+        ("info-screens",),
+        "Pages per Agenda schedule, with priorities and a minimum time between two displays",
+    ),
+    Feature(
+        "recipes",
+        "FEATURE_RECIPES",
+        (),
+        ("info-screens",),
+        "Recipe page: a recipe of Chefkoch (of the day or searched with filters) or TheMealDB with "
+        "its picture, in landscape and portrait, optionally with a QR code of its address",
+    ),
+    Feature(
+        "text-outline",
+        "FEATURE_TEXT_OUTLINE",
+        (),
+        ("overlays",),
+        "Overlay and caption text without a bar: white or black text with a 1 or 2 px border",
+    ),
+    Feature(
+        "multi-upload",
+        "FEATURE_MULTI_UPLOAD",
+        (),
+        (),
+        "Web UI: upload several images at once, also pre-rendered ones",
+    ),
+    Feature(
         "fixes",
         "FORK_FIXES",
         (),
@@ -141,6 +286,47 @@ FEATURES = (
 )
 
 FEATURES_BY_NAME = {f.name: f for f in FEATURES}
+
+# A bundle is one name for several features: `--with extras` asks for every member. It is not a
+# feature (no Kconfig flag, no sdkconfig overlay, no web directive): it only expands to the members
+# before anything is decided, so the build, the web app and the listings only ever see features.
+# A member the board cannot build (missing hardware) is skipped with a notice, like under
+# --all-features; the members' dependencies are added as usual; `--without <member>` trims it.
+Bundle = namedtuple("Bundle", "name members summary")
+
+BUNDLES = (
+    Bundle(
+        "extras",
+        (
+            "webcal",
+            "multi-upload",
+            "source-auth",
+            "caldav",
+            "caldav-todo",
+            "agenda-rrule",
+            "upload-dedup",
+            "glyphs",
+            "info-screens",
+            "chore-wheel",
+            "weather-screen",
+            "fact-of-the-day",
+            "finance-snapshot",
+            "fuel-prices",
+            "market-quotes",
+            "route-time",
+            "artworks",
+            "schedule-pages",
+            "recipes",
+            "text-outline",
+        ),
+        "Everything added after the first fork release: webcal, CalDAV calendars and to-dos, "
+        "the full recurrence rules of the Agenda calendars, "
+        "multi-upload, duplicate detection, glyphs, the information pages, the travel time on the fuel "
+        "page, the artworks mode, the pages per schedule, the recipe page and the text border of the overlays",
+    ),
+)
+
+BUNDLES_BY_NAME = {b.name: b for b in BUNDLES}
 
 _HARDWARE_LABEL = {
     "speaker": "a speaker",
@@ -219,6 +405,17 @@ def is_supported(name, board):
     return _unsupported(normalize(name), board, ()) is None
 
 
+def _split_bundles(names):
+    """A selection of feature and bundle names as (feature names, names the bundles stand for)."""
+    singles, members = [], []
+    for name in names:
+        if name in BUNDLES_BY_NAME:
+            members += [m for m in BUNDLES_BY_NAME[name].members if m not in members]
+        elif name not in singles:
+            singles.append(name)
+    return singles, members
+
+
 def resolve(board, requested=(), excluded=(), all_features=False):
     """Decide which features get built.
 
@@ -232,9 +429,16 @@ def resolve(board, requested=(), excluded=(), all_features=False):
     requested = [normalize(n) for n in requested]
     excluded = [normalize(n) for n in excluded]
     for name in requested + excluded:
-        if name not in FEATURES_BY_NAME:
-            valid = ", ".join(FEATURES_BY_NAME)
+        if name not in FEATURES_BY_NAME and name not in BUNDLES_BY_NAME:
+            valid = ", ".join([*FEATURES_BY_NAME, *BUNDLES_BY_NAME])
             raise FeatureError(f"unknown feature '{name}' (valid: {valid})")
+    requested, bundle_members = _split_bundles(requested)
+    excluded, excluded_members = _split_bundles(excluded)
+    excluded += [m for m in excluded_members if m not in excluded]
+    # what a bundle stands for, minus what was named on its own or trimmed with --without
+    bundle_members = [
+        m for m in bundle_members if m not in requested and m not in excluded
+    ]
     conflict = sorted(set(requested) & set(excluded))
     if conflict:
         raise FeatureError(
@@ -262,7 +466,13 @@ def resolve(board, requested=(), excluded=(), all_features=False):
             if reason:
                 raise FeatureError(f"'{name}' {reason}")
             enabled.add(name)
-        pending = list(requested)
+        for name in bundle_members:
+            reason = _unsupported(name, board, excluded)
+            if reason:
+                skipped[name] = reason
+            else:
+                enabled.add(name)
+        pending = list(requested) + [m for m in bundle_members if m in enabled]
         while pending:
             current = pending.pop()
             for dependency in FEATURES_BY_NAME[current].requires:
@@ -285,4 +495,8 @@ def describe(board):
         lines.append(f"  {feature.name:<{width}}  {status:<13}  {feature.summary}")
         if reason:
             lines.append(f"  {'':<{width}}  {'':<13}  -> {reason}")
+    for bundle in BUNDLES:
+        lines.append("")
+        lines.append(f"Bundle '{bundle.name}' (--with {bundle.name}): {bundle.summary}")
+        lines.append(f"  {', '.join(bundle.members)}")
     return "\n".join(lines)

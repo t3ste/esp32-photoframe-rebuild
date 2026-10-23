@@ -42,6 +42,39 @@ MODULES = {
     "display-history": ["history_manager"],
     "https": ["https_cert"],
     "facecrop": ["facecrop_metadata"],
+    "source-auth": ["source_auth"],
+    "caldav": ["caldav", "caldav_fetch"],
+    "caldav-todo": ["vtodo"],
+    "agenda-rrule": ["calendar_rrule"],
+    "glyphs": ["glyph_extras"],
+    "info-screens": [
+        "screen_canvas",
+        "screen_digits",
+        "info_screens_core",
+        "info_screens",
+        "json_scan",
+    ],
+    "chore-wheel": ["screen_chore_wheel"],
+    "weather-screen": ["screen_weather"],
+    "fact-of-the-day": ["fact_pack", "fact_service", "screen_fact"],
+    "finance-snapshot": ["fx_rates", "screen_finance"],
+    "fuel-prices": ["fuel_prices", "screen_fuel"],
+    "market-quotes": ["market_quotes", "market_service", "screen_markets"],
+    "artworks": ["art_select", "art_caption", "art_sources", "art_store", "art_flow"],
+    "schedule-pages": ["sched_pick"],
+    "text-outline": ["text_outline"],
+    "recipes": [
+        "recipe_text",
+        "recipe_source",
+        "recipe_font",
+        "recipe_qr",
+        "recipe_layout",
+        "recipe_engine",
+        "recipe_service",
+        "screen_recipe",
+    ],
+    "route-time": ["route_time", "route_service"],
+    "upload-dedup": ["dedup", "dedup_payload", "dedup_service"],
 }
 ALWAYS_HELPERS = {
     "http_fetch": "FORK_HTTP_FETCH",
@@ -61,6 +94,8 @@ SELECTS = {
         "climate",
         "error-banner",
         "facecrop",
+        "glyphs",
+        "text-outline",
     ],
     "FORK_AUDIO_HAL": ["chimes", "alarmclock"],
 }
@@ -207,7 +242,11 @@ def sources_for(feature_names):
     for stem, flag in ALWAYS_HELPERS.items():
         if flag in flags:
             files.append(main / f"{stem}.c")
-    headers = sorted(main.glob("*.h")) + sorted((ROOT / "components").rglob("*.h"))
+    # (the vendored libical is third-party code with no feature guards - and its port/config.h would shadow
+    # main/config.h, which is not what this check is about)
+    headers = sorted(main.glob("*.h")) + sorted(
+        p for p in (ROOT / "components").rglob("*.h") if "libical" not in p.parts
+    )
     comp = [ROOT / "components/board_hal/src/driver_waveshare_photopainter_73.c"]
     if "FORK_AUDIO_HAL" in flags:
         comp.append(ROOT / "components/board_hal/src/audio_chime.c")
@@ -266,7 +305,20 @@ def include_closure(path, active_raw, headers_by_name):
     return seen
 
 
+def with_requirements(feature_names):
+    """The set as build.py builds it: a feature brings the features it requires."""
+    names = list(feature_names)
+    pending = list(names)
+    while pending:
+        for dependency in feature_registry.FEATURES_BY_NAME[pending.pop()].requires:
+            if dependency not in names:
+                names.append(dependency)
+                pending.append(dependency)
+    return names
+
+
 def check(feature_names):
+    feature_names = with_requirements(feature_names)
     flags, sources, headers = sources_for(feature_names)
     active_text, active_raw, file_defs, inactive_defs = {}, {}, {}, set()
     for path in sources + headers:

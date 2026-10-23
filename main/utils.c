@@ -22,20 +22,52 @@
 #if FORK_FIXES
 #include "config_track.h"
 #endif
+#if FEATURE_UPLOAD_DEDUP
+#include "dedup_service.h"
+#endif
+#if FEATURE_INFO_SCREENS
+#include "info_screens.h"
+#endif
+#if FEATURE_FUEL_PRICES
+#include "fuel_prices.h"
+#endif
+#if FEATURE_MARKET_QUOTES
+#include "market_quotes.h"
+#endif
+#if FEATURE_ARTWORKS
+#include "art_flow.h"
+#include "art_sources.h"
+#endif
+#if FEATURE_SCHEDULE_PAGES
+#include "agenda_manager.h"
+#endif
+#if FEATURE_ROUTE_TIME
+#include "route_service.h"
+#include "route_time.h"
+#endif
+#if FEATURE_RECIPES
+#include "recipe_source.h"
+#endif
+#if FEATURE_TEXT_OUTLINE
+#include "text_outline.h"
+#endif
 #include "cron.h"
 #include "debug_log.h"
 #include "display_flow.h"
 #include "display_manager.h"
 #include "esp_app_desc.h"
+#include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_timer.h"
+#include "esp_tls.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "http_auth.h"
 #include "image_processor.h"
+#include "mbedtls/x509.h"
 #include "mdns_service.h"
 #include "nvs.h"
 #include "periodic_tasks.h"
@@ -541,6 +573,10 @@ esp_err_t apply_config_from_json(cJSON *root, bool from_remote)
         else if (strcmp(mode_str, "telegram") == 0)
             mode = ROTATION_MODE_TELEGRAM;
 #endif
+#if FEATURE_ARTWORKS
+        else if (strcmp(mode_str, "artworks") == 0)
+            mode = ROTATION_MODE_ARTWORKS;
+#endif
         // Backwards compatibility: accept "sdcard" as alias for "storage"
         if (strcmp(mode_str, "sdcard") == 0)
             mode = ROTATION_MODE_STORAGE;
@@ -658,10 +694,10 @@ esp_err_t apply_config_from_json(cJSON *root, bool from_remote)
 
 #endif
 #if FEATURE_TELEGRAM
-    // Telegram Bot - write-only, like the Calendar/ToDo addresses: GET
-    // /api/config never echoes these back, so the Web UI's inputs start blank
-    // and an empty value here means "not touched", not "clear it". A
-    // dedicated *_clear flag removes one deliberately.
+    // Telegram Bot - write-only, like fuel_api_key below: GET /api/config
+    // never echoes these back, so the Web UI's inputs start blank and an
+    // empty value here means "not touched", not "clear it". A dedicated
+    // *_clear flag removes one deliberately.
     item = cJSON_GetObjectItem(root, "telegram_bot_token");
     if (item && cJSON_IsString(item)) {
         const char *token = cJSON_GetStringValue(item);
@@ -885,6 +921,21 @@ esp_err_t apply_config_from_json(cJSON *root, bool from_remote)
     if (item && cJSON_IsBool(item)) {
         config_manager_set_caption_invert_colors_enabled(cJSON_IsTrue(item));
     }
+#if FEATURE_TEXT_OUTLINE
+    // the text style of the overlays and captions: a name of text_outline.h ("bar", "white",
+    // "black"; any other name is ignored like the other settings) and the border width
+    item = cJSON_GetObjectItem(root, "overlay_text_style");
+    if (item && cJSON_IsString(item)) {
+        int style = text_style_from_name(cJSON_GetStringValue(item));
+        if (style >= 0) {
+            config_manager_set_overlay_text_style(style);
+        }
+    }
+    item = cJSON_GetObjectItem(root, "overlay_text_border");
+    if (item && cJSON_IsNumber(item)) {
+        config_manager_set_overlay_text_border(item->valueint);
+    }
+#endif
     item = cJSON_GetObjectItem(root, "weather_multiline_enabled");
     if (item && cJSON_IsBool(item)) {
         config_manager_set_weather_multiline_enabled(cJSON_IsTrue(item));
@@ -986,6 +1037,315 @@ esp_err_t apply_config_from_json(cJSON *root, bool from_remote)
     item = cJSON_GetObjectItem(root, "agenda_shift_start");
     if (item && cJSON_IsString(item)) {
         config_manager_set_agenda_shift_start(cJSON_GetStringValue(item));
+    }
+#endif
+#if FEATURE_INFO_SCREENS
+    item = cJSON_GetObjectItem(root, "info_screens");
+    if (item && cJSON_IsArray(item)) {
+        uint32_t mask = 0;
+        cJSON *entry;
+        cJSON_ArrayForEach(entry, item)
+        {
+            int id =
+                cJSON_IsString(entry) ? info_screen_id_from_name(cJSON_GetStringValue(entry)) : -1;
+            if (id >= 0) {
+                mask |= 1u << id;
+            }
+        }
+        config_manager_set_info_screens_mask(mask);
+    }
+#if FEATURE_CHORE_WHEEL
+    item = cJSON_GetObjectItem(root, "chore_members");
+    if (item && cJSON_IsString(item)) {
+        config_manager_set_chore_members(cJSON_GetStringValue(item));
+    }
+    item = cJSON_GetObjectItem(root, "chore_tasks");
+    if (item && cJSON_IsString(item)) {
+        config_manager_set_chore_tasks(cJSON_GetStringValue(item));
+    }
+#endif
+#if FEATURE_FINANCE_SNAPSHOT
+    item = cJSON_GetObjectItem(root, "fx_currencies");
+    if (item && cJSON_IsString(item)) {
+        config_manager_set_fx_currencies(cJSON_GetStringValue(item));
+    }
+#endif
+#if FEATURE_FUEL_PRICES
+    item = cJSON_GetObjectItem(root, "fuel_type");
+    if (item && cJSON_IsString(item)) {
+        config_manager_set_fuel_type(
+            (int) fuel_type_from_name(cJSON_GetStringValue(item), FUEL_E10));
+    }
+    item = cJSON_GetObjectItem(root, "fuel_radius_km");
+    if (item && cJSON_IsNumber(item)) {
+        config_manager_set_fuel_radius_km(item->valueint);
+    }
+    item = cJSON_GetObjectItem(root, "fuel_count");
+    if (item && cJSON_IsNumber(item)) {
+        config_manager_set_fuel_count(item->valueint);
+    }
+    item = cJSON_GetObjectItem(root, "fuel_hide_closed");
+    if (item && cJSON_IsBool(item)) {
+        config_manager_set_fuel_hide_closed(cJSON_IsTrue(item));
+    }
+    // Write-only, like the calendar URLs: an empty string means "not touched", and a separate flag
+    // removes the key.
+    item = cJSON_GetObjectItem(root, "fuel_api_key");
+    if (item && cJSON_IsString(item) && strlen(cJSON_GetStringValue(item)) > 0) {
+        config_manager_set_fuel_api_key(cJSON_GetStringValue(item));
+    }
+    item = cJSON_GetObjectItem(root, "fuel_api_key_clear");
+    if (item && cJSON_IsTrue(item)) {
+        config_manager_set_fuel_api_key("");
+    }
+#endif
+#if FEATURE_ROUTE_TIME
+    // The travel time: the places are typed here, but they only count after the Web UI has had them
+    // checked (/api/route/check); a changed text drops the place found for the old one. The keys
+    // are write-only like the other keys: an empty string means "not touched", a separate flag
+    // removes one, a text that cannot be a key is ignored.
+    item = cJSON_GetObjectItem(root, "route_enabled");
+    if (item && cJSON_IsBool(item)) {
+        config_manager_set_route_enabled(cJSON_IsTrue(item));
+    }
+    item = cJSON_GetObjectItem(root, "route_from");
+    if (item && cJSON_IsString(item)) {
+        config_manager_set_route_text(0, cJSON_GetStringValue(item));
+        route_service_forget();
+    }
+    item = cJSON_GetObjectItem(root, "route_to");
+    if (item && cJSON_IsString(item)) {
+        config_manager_set_route_text(1, cJSON_GetStringValue(item));
+        route_service_forget();
+    }
+    item = cJSON_GetObjectItem(root, "route_ref_there_min");
+    if (item && cJSON_IsNumber(item)) {
+        config_manager_set_route_ref(0, item->valueint);
+    }
+    item = cJSON_GetObjectItem(root, "route_ref_back_min");
+    if (item && cJSON_IsNumber(item)) {
+        config_manager_set_route_ref(1, item->valueint);
+    }
+    item = cJSON_GetObjectItem(root, "route_percent");
+    if (item && cJSON_IsNumber(item)) {
+        config_manager_set_route_percent(item->valueint);
+    }
+    item = cJSON_GetObjectItem(root, "route_min_excess_min");
+    if (item && cJSON_IsNumber(item)) {
+        config_manager_set_route_min_excess(item->valueint);
+    }
+    item = cJSON_GetObjectItem(root, "route_label");
+    if (item && cJSON_IsString(item)) {
+        config_manager_set_route_label(cJSON_GetStringValue(item));
+    }
+    item = cJSON_GetObjectItem(root, "route_key_tomtom");
+    if (item && cJSON_IsString(item) && route_key_valid(cJSON_GetStringValue(item))) {
+        config_manager_set_route_key_tomtom(cJSON_GetStringValue(item));
+        route_service_forget();
+    }
+    item = cJSON_GetObjectItem(root, "route_key_tomtom_clear");
+    if (item && cJSON_IsTrue(item)) {
+        config_manager_set_route_key_tomtom("");
+        route_service_forget();
+    }
+    item = cJSON_GetObjectItem(root, "route_key_here");
+    if (item && cJSON_IsString(item) && route_key_valid(cJSON_GetStringValue(item))) {
+        config_manager_set_route_key_here(cJSON_GetStringValue(item));
+        route_service_forget();
+    }
+    item = cJSON_GetObjectItem(root, "route_key_here_clear");
+    if (item && cJSON_IsTrue(item)) {
+        config_manager_set_route_key_here("");
+        route_service_forget();
+    }
+#endif
+#if FEATURE_RECIPES
+    {
+        // The recipe page: the choices are names of the lists in recipe_source.h (a name that is
+        // not in its list is ignored, like the other settings), saved together with one write. The
+        // key of TheMealDB is write-only like the other keys.
+        recipe_options_t recipe_options;
+        config_manager_get_recipe_options(&recipe_options);
+        bool recipe_changed = false;
+        struct {
+            const char *key;
+            const char *const *list;
+            int count;
+            int *field;
+        } names[] = {
+            {"recipe_source", RECIPE_SOURCE_NAMES, RECIPE_SOURCE_COUNT, &recipe_options.source},
+            {"recipe_variant", RECIPE_VARIANTS, RECIPE_VARIANT_COUNT, &recipe_options.variant},
+            {"recipe_property", RECIPE_PROPERTIES, RECIPE_PROPERTY_COUNT, &recipe_options.property},
+            {"recipe_health", RECIPE_HEALTH, RECIPE_HEALTH_COUNT, &recipe_options.health},
+            {"recipe_category", RECIPE_CATEGORIES, RECIPE_CATEGORY_COUNT, &recipe_options.category},
+            {"recipe_country", RECIPE_COUNTRIES, RECIPE_COUNTRY_COUNT, &recipe_options.country},
+            {"recipe_meal", RECIPE_MEALS, RECIPE_MEAL_COUNT, &recipe_options.meal},
+            {"recipe_sort", RECIPE_SORTS, RECIPE_SORT_COUNT, &recipe_options.sort},
+            {"recipe_mealdb_category", RECIPE_MEALDB_CATEGORIES, RECIPE_MEALDB_CATEGORY_COUNT,
+             &recipe_options.mealdb_category},
+        };
+        for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+            item = cJSON_GetObjectItem(root, names[i].key);
+            if (item && cJSON_IsString(item)) {
+                int index =
+                    recipe_list_index(names[i].list, names[i].count, cJSON_GetStringValue(item));
+                if (index >= 0) {
+                    *names[i].field = index;
+                    recipe_changed = true;
+                }
+            }
+        }
+        struct {
+            const char *key;
+            const int *values;
+            int count;
+            int *field;
+        } numbers[] = {
+            {"recipe_max_minutes", RECIPE_MAX_MINUTES, RECIPE_TIME_COUNT, &recipe_options.max_time},
+            {"recipe_min_rating", RECIPE_MIN_RATINGS, RECIPE_RATING_COUNT,
+             &recipe_options.min_rating},
+        };
+        for (size_t i = 0; i < sizeof(numbers) / sizeof(numbers[0]); i++) {
+            item = cJSON_GetObjectItem(root, numbers[i].key);
+            if (item && cJSON_IsNumber(item)) {
+                for (int k = 0; k < numbers[i].count; k++) {
+                    if (numbers[i].values[k] == item->valueint) {
+                        *numbers[i].field = k;
+                        recipe_changed = true;
+                    }
+                }
+            }
+        }
+        item = cJSON_GetObjectItem(root, "recipe_query");
+        if (item && cJSON_IsString(item)) {
+            snprintf(recipe_options.query, sizeof(recipe_options.query), "%s",
+                     cJSON_GetStringValue(item));
+            recipe_changed = true;
+        }
+        item = cJSON_GetObjectItem(root, "recipe_image");
+        if (item && cJSON_IsBool(item)) {
+            recipe_options.image = cJSON_IsTrue(item);
+            recipe_changed = true;
+        }
+        item = cJSON_GetObjectItem(root, "recipe_qr");
+        if (item && cJSON_IsBool(item)) {
+            recipe_options.qr = cJSON_IsTrue(item);
+            recipe_changed = true;
+        }
+        if (recipe_changed) {
+            config_manager_set_recipe_options(&recipe_options);
+        }
+        item = cJSON_GetObjectItem(root, "recipe_mealdb_key");
+        if (item && cJSON_IsString(item) && recipe_mealdb_key_valid(cJSON_GetStringValue(item))) {
+            config_manager_set_recipe_mealdb_key(cJSON_GetStringValue(item));
+        }
+        item = cJSON_GetObjectItem(root, "recipe_mealdb_key_clear");
+        if (item && cJSON_IsTrue(item)) {
+            config_manager_set_recipe_mealdb_key("");
+        }
+    }
+#endif
+#if FEATURE_MARKET_QUOTES
+    item = cJSON_GetObjectItem(root, "market_symbols");
+    if (item && cJSON_IsString(item)) {
+        config_manager_set_market_symbols(cJSON_GetStringValue(item));
+    }
+    item = cJSON_GetObjectItem(root, "market_yahoo");
+    if (item && cJSON_IsBool(item)) {
+        config_manager_set_market_yahoo(cJSON_IsTrue(item));
+    }
+    // The keys are write-only like the fuel key: an empty string means "not touched", a separate
+    // flag removes one; a text that cannot be a key (letters and digits, 4 to 64) is ignored.
+    item = cJSON_GetObjectItem(root, "market_key_twelvedata");
+    if (item && cJSON_IsString(item) && market_key_valid(cJSON_GetStringValue(item))) {
+        config_manager_set_market_key_twelvedata(cJSON_GetStringValue(item));
+    }
+    item = cJSON_GetObjectItem(root, "market_key_twelvedata_clear");
+    if (item && cJSON_IsTrue(item)) {
+        config_manager_set_market_key_twelvedata("");
+    }
+    item = cJSON_GetObjectItem(root, "market_key_alphavantage");
+    if (item && cJSON_IsString(item) && market_key_valid(cJSON_GetStringValue(item))) {
+        config_manager_set_market_key_alphavantage(cJSON_GetStringValue(item));
+    }
+    item = cJSON_GetObjectItem(root, "market_key_alphavantage_clear");
+    if (item && cJSON_IsTrue(item)) {
+        config_manager_set_market_key_alphavantage("");
+    }
+#endif
+#endif
+#if FEATURE_ARTWORKS
+    item = cJSON_GetObjectItem(root, "art_types");
+    if (item && cJSON_IsNumber(item)) {
+        config_manager_set_art_types((uint8_t) item->valueint);
+    }
+    item = cJSON_GetObjectItem(root, "art_sources");
+    if (item && cJSON_IsNumber(item)) {
+        config_manager_set_art_sources((uint8_t) item->valueint);
+    }
+    item = cJSON_GetObjectItem(root, "art_save");
+    if (item && cJSON_IsBool(item)) {
+        config_manager_set_art_save(cJSON_IsTrue(item));
+    }
+    item = cJSON_GetObjectItem(root, "art_album");
+    if (item && cJSON_IsString(item)) {
+        config_manager_set_art_album(
+            cJSON_GetStringValue(item));  // a name that cannot be a folder is ignored
+    }
+    item = cJSON_GetObjectItem(root, "art_caption");
+    if (item && cJSON_IsBool(item)) {
+        config_manager_set_art_caption(cJSON_IsTrue(item));
+    }
+    item = cJSON_GetObjectItem(root, "art_scale_mode");
+    if (item && cJSON_IsString(item)) {
+        config_manager_set_art_scale(art_scale_from_name(cJSON_GetStringValue(item)));
+    }
+    item = cJSON_GetObjectItem(root, "art_match_orient");
+    if (item && cJSON_IsBool(item)) {
+        config_manager_set_art_match_orient(cJSON_IsTrue(item));
+    }
+    cJSON *art_free_min = cJSON_GetObjectItem(root, "art_free_min");
+    cJSON *art_free_target = cJSON_GetObjectItem(root, "art_free_target");
+    if ((art_free_min && cJSON_IsNumber(art_free_min)) ||
+        (art_free_target && cJSON_IsNumber(art_free_target))) {
+        int free_min = (art_free_min && cJSON_IsNumber(art_free_min))
+                           ? art_free_min->valueint
+                           : config_manager_get_art_free_min();
+        int free_target = (art_free_target && cJSON_IsNumber(art_free_target))
+                              ? art_free_target->valueint
+                              : config_manager_get_art_free_target();
+        config_manager_set_art_free_limits(free_min, free_target);
+    }
+    // The key is write-only like the fuel key: an empty string means "not touched", a separate flag
+    // removes it; a text that cannot be a key (letters, digits and '_', 4 to 64) is ignored.
+    item = cJSON_GetObjectItem(root, "art_si_key");
+    if (item && cJSON_IsString(item) && art_si_key_valid(cJSON_GetStringValue(item))) {
+        config_manager_set_art_si_key(cJSON_GetStringValue(item));
+    }
+    item = cJSON_GetObjectItem(root, "art_si_key_clear");
+    if (item && cJSON_IsTrue(item)) {
+        config_manager_set_art_si_key("");
+    }
+#endif
+#if FEATURE_UPLOAD_DEDUP
+    item = cJSON_GetObjectItem(root, "dedup_mode");
+    if (item && cJSON_IsString(item)) {
+        const char *mode_str = cJSON_GetStringValue(item);
+        config_manager_set_dedup_mode(strcmp(mode_str, "off") == 0    ? 0
+                                      : strcmp(mode_str, "warn") == 0 ? 2
+                                                                      : 1);
+    }
+    item = cJSON_GetObjectItem(root, "dedup_hash");
+    if (item && cJSON_IsString(item)) {
+        config_manager_set_dedup_hash(strcmp(cJSON_GetStringValue(item), "payload") == 0 ? 1 : 0);
+    }
+    item = cJSON_GetObjectItem(root, "dedup_index_existing");
+    if (item && cJSON_IsBool(item)) {
+        bool was_on = config_manager_get_dedup_index_existing();
+        config_manager_set_dedup_index_existing(cJSON_IsTrue(item));
+        if (cJSON_IsTrue(item) && !was_on) {
+            dedup_service_scan_start(NULL);  // switched on: start indexing the earlier images
+        }
     }
 #endif
 #if FEATURE_AGENDA && FEATURE_OVERLAYS
@@ -1189,6 +1549,12 @@ esp_err_t apply_config_from_json(cJSON *root, bool from_remote)
     if (item && cJSON_IsString(item)) {
         config_manager_set_agenda_cal_e_name(cJSON_GetStringValue(item));
     }
+#if FEATURE_SOURCE_AUTH
+    item = cJSON_GetObjectItem(root, "source_auth_allow_http");
+    if (item && cJSON_IsBool(item)) {
+        config_manager_set_source_auth_allow_http(cJSON_IsTrue(item));
+    }
+#endif
     apply_extra_ics_url(root, "agenda_cal_c_url", "agenda_cal_c_refetch",
                         config_manager_get_agenda_cal_c_url(), AGENDA_CAL_CACHE_PATH_C,
                         AGENDA_CAL_CACHE_PATH_C_FLAT, config_manager_set_agenda_cal_c_url);
@@ -1249,7 +1615,64 @@ esp_err_t apply_config_from_json(cJSON *root, bool from_remote)
             }
             config_manager_set_agenda_cron_rules(rules, n);
             power_manager_reset_agenda_timer();
+#if FEATURE_SCHEDULE_PAGES
+            power_manager_reset_rotate_timer();  // the photo rotation gives way to these rules
+#endif
         } while (0);
+#if FEATURE_SCHEDULE_PAGES
+    {
+        // The pages and the hold of every agenda schedule, in the order of agenda_cron (the
+        // schedule's position is its priority), and the common minimum time between two displays.
+        // A client that reorders agenda_cron sends these together with it.
+        cJSON *pages_item = cJSON_GetObjectItem(root, "agenda_cron_pages");
+        cJSON *hold_item = cJSON_GetObjectItem(root, "agenda_cron_hold");
+        bool pages_given = pages_item && cJSON_IsArray(pages_item);
+        bool hold_given = hold_item && cJSON_IsArray(hold_item);
+        if (pages_given || hold_given) {
+            uint16_t masks[MAX_CRON_RULES], holds[MAX_CRON_RULES];
+            for (int i = 0; i < MAX_CRON_RULES; i++) {
+                masks[i] = config_manager_get_sched_mask(i);
+                holds[i] = config_manager_get_sched_hold(i);
+            }
+            if (pages_given) {
+                for (int i = 0; i < MAX_CRON_RULES; i++) {
+                    cJSON *names = cJSON_GetArrayItem(pages_item, i);
+                    uint16_t mask = 0;
+                    cJSON *entry;
+                    cJSON_ArrayForEach(entry, names)
+                    {
+                        int id = cJSON_IsString(entry)
+                                     ? info_screen_id_from_name(cJSON_GetStringValue(entry))
+                                     : -1;
+                        if (id >= 0) {
+                            mask |= (uint16_t) (1u << id);
+                        }
+                    }
+                    masks[i] = mask;  // schedules past the end of the list: not assigned
+                }
+            }
+            if (hold_given) {
+                for (int i = 0; i < MAX_CRON_RULES; i++) {
+                    cJSON *value = cJSON_GetArrayItem(hold_item, i);
+                    int minutes = cJSON_IsNumber(value) ? value->valueint : 0;
+                    holds[i] =
+                        (uint16_t) (minutes < 0 ? 0
+                                                : (minutes > SCHED_GAP_MAX_MIN ? SCHED_GAP_MAX_MIN
+                                                                               : minutes));
+                }
+            }
+            config_manager_set_sched_pages(masks, holds);
+            power_manager_reset_agenda_timer();
+            power_manager_reset_rotate_timer();
+        }
+        item = cJSON_GetObjectItem(root, "agenda_gap_min");
+        if (item && cJSON_IsNumber(item)) {
+            config_manager_set_sched_gap(item->valueint);
+            power_manager_reset_agenda_timer();
+            power_manager_reset_rotate_timer();
+        }
+    }
+#endif
     item = cJSON_GetObjectItem(root, "agenda_stack_layout");
     if (item && cJSON_IsBool(item)) {
         config_manager_set_agenda_stack_layout(cJSON_IsTrue(item));
@@ -1419,9 +1842,10 @@ typedef struct {
     FILE *file;
     int total_read;
     char *content_type;
-    char *thumbnail_url;   // Optional thumbnail URL from X-Thumbnail-URL header
-    char *config_payload;  // Optional config JSON from X-Config-Payload header
-    char *etag;            // Optional ETag buffer (HTTP_ETAG_MAX_LEN bytes) for 304 caching
+    char *thumbnail_url;     // Optional thumbnail URL from X-Thumbnail-URL header
+    char *config_payload;    // Optional config JSON from X-Config-Payload header
+    char *etag;              // Optional ETag buffer (HTTP_ETAG_MAX_LEN bytes) for 304 caching
+    bool tls_verify_failed;  // The server's certificate was rejected by this attempt's trust anchor
 } download_context_t;
 
 // HTTP event handler to write data to file
@@ -1430,6 +1854,18 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
     download_context_t *ctx = (download_context_t *) evt->user_data;
 
     switch (evt->event_id) {
+    case HTTP_EVENT_ERROR: {
+        // esp_http_client folds every TLS failure into ESP_ERR_HTTP_CONNECT;
+        // the esp-tls error handle still says whether it was the certificate.
+        int mbedtls_code = 0;
+        int verify_flags = 0;
+        esp_tls_get_and_clear_last_error((esp_tls_error_handle_t) evt->data, &mbedtls_code,
+                                         &verify_flags);
+        if (verify_flags != 0 || mbedtls_code == -MBEDTLS_ERR_X509_CERT_VERIFY_FAILED) {
+            ctx->tls_verify_failed = true;
+        }
+        break;
+    }
     case HTTP_EVENT_ON_DATA:
         if (ctx->file) {
             fwrite(evt->data, 1, evt->data_len, ctx->file);
@@ -1539,6 +1975,28 @@ static esp_err_t fetch_perform_download(const char *url, bool *not_modified, ima
     // a minute or more -- another one mostly spends battery on the same result
     // (#121).
     int64_t fetch_start_us = esp_timer_get_time();
+    // A pinned CA is tried first. When it rejects the server, the built-in CA
+    // bundle gets a turn: the server may have moved to a publicly trusted
+    // certificate, or its CA renewed under another intermediate, which Let's
+    // Encrypt does at random (#142). If the bundle accepts, the pin has
+    // outlived its purpose and is dropped. A server neither accepts is never
+    // pinned here: trust is only ever granted from the owner's own request
+    // (saving the URL, POST /api/trust-certificate), never to whoever answers
+    // a fetch.
+    enum { TRUST_PIN, TRUST_BUNDLE } trust;
+    size_t pinned_cert_len = 0;
+#if CONFIG_FEATURE_HTTPS
+    bool had_pin = config_manager_has_ca_cert();
+#else
+    bool had_pin = false;
+#endif
+    bool pin_rejected = false;
+    // Which pin was rejected: a config request can replace it while this
+    // fetch is still running, and that one must survive.
+    uint32_t rejected_pin_generation = 0;
+    char tls_err_msg[256] = {0};
+    trust = had_pin ? TRUST_PIN : TRUST_BUNDLE;
+
     int attempts = 0;
     for (int retry = 0; retry < max_retries; retry++) {
         if (retry > 0) {
@@ -1574,10 +2032,6 @@ static esp_err_t fetch_perform_download(const char *url, bool *not_modified, ima
                                   .config_payload = config_payload_buffer,
                                   .etag = etag_buffer};
 
-        // Use custom CA cert for HTTPS if configured
-        size_t pinned_cert_len = 0;
-        const uint8_t *pinned_cert = config_manager_get_ca_cert_der(&pinned_cert_len);
-
         esp_http_client_config_t config = {
             .url = url,
             // Per socket operation (connect, and each wait for more data), not
@@ -1589,13 +2043,39 @@ static esp_err_t fetch_perform_download(const char *url, bool *not_modified, ima
             .max_redirection_count = 5,
             .user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             .buffer_size_tx = 2048,
-            .cert_der = (const char *) pinned_cert,
-            .cert_len = pinned_cert_len,
         };
+        // The request keeps its own copy of the pin: a config request can
+        // replace (and free) the stored one while the download runs.
+        uint8_t *pinned_cert = NULL;
+        uint32_t pin_generation = 0;
+        if (trust == TRUST_PIN) {
+#if CONFIG_FEATURE_HTTPS
+            pinned_cert = config_manager_copy_ca_cert_der(&pinned_cert_len, &pin_generation);
+#else
+            // HTTPS off: no certificate to copy
+#endif
+            if (!pinned_cert && pinned_cert_len > 0) {
+                // Never fall through to an unverified request
+                ESP_LOGE(TAG, "Out of memory copying the pinned certificate");
+                fclose(file);
+                continue;
+            }
+            if (!pinned_cert) {
+                ESP_LOGW(TAG, "The pin was removed since this fetch started; using the CA bundle");
+                trust = TRUST_BUNDLE;
+            }
+        }
+        if (trust == TRUST_PIN) {
+            config.cert_der = (const char *) pinned_cert;
+            config.cert_len = pinned_cert_len;
+        } else {
+            config.crt_bundle_attach = esp_crt_bundle_attach;
+        }
 
         esp_http_client_handle_t client = esp_http_client_init(&config);
         if (!client) {
             ESP_LOGE(TAG, "Failed to initialize HTTP client");
+            free(pinned_cert);
             fclose(file);
             continue;  // Try again
         }
@@ -1701,6 +2181,22 @@ static esp_err_t fetch_perform_download(const char *url, bool *not_modified, ima
 
         fclose(file);
         esp_http_client_cleanup(client);
+        free(pinned_cert);
+
+        if (err == ESP_OK && pin_rejected) {
+#if CONFIG_FEATURE_HTTPS
+            if (config_manager_clear_ca_cert_der_if_unchanged(rejected_pin_generation)) {
+                ESP_LOGW(TAG, "The CA bundle verifies the server; dropped the pinned certificate");
+                config_manager_touch_config();
+            } else {
+                ESP_LOGW(TAG, "Pinned certificate was replaced during the fetch; keeping it");
+            }
+            pin_rejected = false;
+#else
+            // HTTPS off: no pinned certificate to drop
+            pin_rejected = false;
+#endif
+        }
 
         // 304 Not Modified: server confirmed the cached image is still current.
         // eInk retains the last rendered image without power, so skip the refresh
@@ -1737,6 +2233,24 @@ static esp_err_t fetch_perform_download(const char *url, bool *not_modified, ima
         // Clean up failed download (don't free content_type - it's reused across retries)
         unlink(temp_upload_path);
 
+        if (ctx.tls_verify_failed) {
+            if (trust == TRUST_PIN) {
+                ESP_LOGW(TAG, "Pinned certificate rejects the server; trying the CA bundle");
+                trust = TRUST_BUNDLE;
+                pin_rejected = true;
+                rejected_pin_generation = pin_generation;
+                retry--;  // another trust anchor, not a repeat of this attempt
+                continue;
+            }
+            snprintf(tls_err_msg, sizeof(tls_err_msg),
+                     had_pin ? "Server certificate not trusted: it matches neither the pinned "
+                               "certificate nor a public CA. Use \"Trust certificate\" under "
+                               "the Image URL to accept it."
+                             : "Server certificate is not issued by a public CA. Use \"Trust "
+                               "certificate\" under the Image URL to accept it.");
+            break;
+        }
+
         // A 4xx is the server's verdict on this request (bad URL, bad token,
         // 429 telling us to slow down); asking again 3 s later only spends
         // battery on the same answer (#121, #134). 5xx and transport errors
@@ -1752,7 +2266,9 @@ static esp_err_t fetch_perform_download(const char *url, bool *not_modified, ima
                  (int) ((esp_timer_get_time() - fetch_start_us) / 1000));
         // Store descriptive error for UI display
         char err_msg[256];
-        if (err != ESP_OK) {
+        if (tls_err_msg[0] != '\0') {
+            snprintf(err_msg, sizeof(err_msg), "%s", tls_err_msg);
+        } else if (err != ESP_OK) {
             const char *err_name = esp_err_to_name(err);
             if (err == ESP_ERR_HTTP_CONNECT) {
                 snprintf(err_msg, sizeof(err_msg), "Connection failed (%s)", err_name);
@@ -2463,6 +2979,14 @@ esp_err_t trigger_image_rotation(void)
     rotation_mode_t rotation_mode = config_manager_get_rotation_mode();
     esp_err_t result = ESP_OK;
 
+#if FEATURE_ARTWORKS
+    if (rotation_mode == ROTATION_MODE_ARTWORKS) {
+        // a work from a museum, kept in an album; without network or on any failure a
+        // picture of that album (art_flow.h)
+        return art_flow_rotate();
+    }
+#endif
+
 #if FEATURE_TELEGRAM
     if (rotation_mode == ROTATION_MODE_TELEGRAM) {
         // Telegram mode - poll getUpdates, download+display the newest image
@@ -2621,6 +3145,13 @@ cJSON *create_battery_json(void)
 
 int get_seconds_until_next_wakeup(void)
 {
+#if FEATURE_SCHEDULE_PAGES
+    // with pages assigned to the agenda schedules the rotation gives way to them
+    int sched_seconds = agenda_manager_rotation_seconds_until_next();
+    if (sched_seconds >= 0) {
+        return sched_seconds;
+    }
+#endif
     time_t now;
     struct tm timeinfo;
     time(&now);

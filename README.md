@@ -1,5 +1,15 @@
 # ESP32 PhotoFrame — a configurable fork
 
+> **Extended edition.** This is the `extras` line of the firmware: the base project
+> ([t3stier/esp32-photoframe-rebuild](https://github.com/t3stier/esp32-photoframe-rebuild), branch `main`) plus webcal, CalDAV,
+> batch upload, duplicate detection, the information pages (weather, exchange rates, fuel prices, markets, ...) and an artworks
+> mode, switched on with `--with extras`. It is a hobby-scale variant, **tested on one board only** - see
+> [docs/EXTENDED_EDITION.md](docs/EXTENDED_EDITION.md). Releases, the web flasher and the wiki:
+> [t3ste/esp32-photoframe-extras](https://github.com/t3ste/esp32-photoframe-extras) ([wiki](https://github.com/t3ste/esp32-photoframe-extras/wiki)).
+> **Building it yourself? Set `--ota-repo t3ste/esp32-photoframe-extras` or switch the automatic update check off** (Settings ->
+> Power): a frame built from source asks the *base* project for updates by default, and installing one replaces this build with the
+> base firmware, which has none of the extras.
+
 > **About this repository.** A rebuild of
 > [aitjcize/esp32-photoframe](https://github.com/aitjcize/esp32-photoframe), run as a fork of
 > it: the canonical repository is the GitHub fork
@@ -13,13 +23,6 @@
 > [MIT license](LICENSE) applies. Maintaining or contributing to this fork:
 > [docs/MAINTAINING.md](docs/MAINTAINING.md) (handover guide); demo package:
 > [docs/DEMO_PACKAGE.md](docs/DEMO_PACKAGE.md).
->
-> **Looking for more?** The **extended edition** - this firmware plus webcal and CalDAV calendars, monthly and
-> yearly repeating events, the information pages (weather, chore wheel, exchange rates, markets, fuel prices,
-> recipes), pages per Agenda schedule and an artworks mode - is a repository of its own, with its own releases and
-> web flasher, and a [wiki](https://github.com/t3ste/esp32-photoframe-extras/wiki):
-> **[t3ste/esp32-photoframe-extras](https://github.com/t3ste/esp32-photoframe-extras)**. Which repository is for
-> what: [REPOS_AND_BRANCHES.md](https://github.com/t3ste/esp32-photoframe-extras/blob/main/docs/REPOS_AND_BRANCHES.md).
 
 A modern, feature-rich firmware for ESP32-based e-paper photo frames (currently supporting **Waveshare PhotoPainter**, **Seeed Studio XIAO EE02/EE03/EE04**, **Seeed Studio reTerminal E1002/E1003/E1004**, and **M5Stack M5Paper**). This firmware replaces stock firmware with a powerful RESTful API, web interface, and **significantly better image quality**.
 
@@ -39,10 +42,12 @@ A modern, feature-rich firmware for ESP32-based e-paper photo frames (currently 
 ## Optional Features
 
 Every row below is off by default (the firmware is then upstream's own, 1:1) and switched on one at a time -
-`python build.py --with telegram,agenda` and so on, or `--all-features` for everything the board's hardware
+`python build.py --with telegram,agenda` and so on, `--with extras` for the whole group of newer options (webcal,
+CalDAV, multi-upload, duplicate detection, the information pages and the artworks mode), or `--all-features` for everything the board's hardware
 supports. This project's own releases, the web flasher, and the frame's OTA update all ship the **full** build for
 each board (every feature that board's hardware supports) - see [Installation](#installation). Full list, hardware
-needs, and how combinations are validated: [docs/FEATURES.md](docs/FEATURES.md).
+needs, and how combinations are validated: [docs/FEATURES.md](docs/FEATURES.md). How to use the newer options:
+[user guide to the extras](docs/EXTRAS_USER_GUIDE.md).
 
 | Feature (`--with ...`) | What it adds | Needs | Docs |
 | --- | --- | --- | --- |
@@ -61,7 +66,43 @@ needs, and how combinations are validated: [docs/FEATURES.md](docs/FEATURES.md).
 | 🚀 `ota-channel` | Choose the stable or a pre-release OTA update channel | - | |
 | 📶 `wifi-resilience` | Battery TX-power cap, a performance mode, a lower reconnect budget for Telegram power save, a MIC failure / 802.1X failure counted as a rejected password. **Removed since v219.0.0:** the "extended retry" and "reprovision when attempts run out" settings - upstream's own WiFi policy (v2.19.0) keeps the credentials and retries without limit, only a rejected password ends in provisioning | - | |
 | 🙂 `facecrop` | Face-aware crop sidecars (via `process-cli`) and pre-rendered Cover/Fit image variants | - | [docs](docs/FACE_CROP.md), [docs](docs/SCALE_MODE.md) |
+| 📆 `webcal` | `webcal://` subscription links for the Agenda calendars, fetched over https | - | |
+| 🔑 `source-auth` | A login (`https://user:password@host/...`) in the calendar and ToDo addresses - for calendars on a home server (Radicale, Baikal, Nextcloud) | - | [docs](docs/SOURCE_AUTH.md) |
+| 🗓️ `caldav` | CalDAV calendars (Nextcloud, Baikal, Radicale): the server sends only the coming days, repeating events already expanded | - | [docs](docs/CALDAV.md) |
+| 🔁 `agenda-rrule` | The Agenda's calendars take every recurrence rule - monthly and yearly repeats, "the second Monday", "the last Friday", several weekdays - not only daily and weekly (libical, about 96 KB of flash) | - | [docs](docs/CALENDAR_RRULE_ENGINE.md) |
+| ✅ `caldav-todo` | The ToDo column can read a CalDAV task list (Nextcloud Tasks, Baikal, Radicale): open to-dos with priority and due date | - | [docs](docs/CALDAV_TODO.md) |
+| 🔤 `glyphs` | Umlauts, ß, ° and € are drawn as themselves in on-display text (overlays, Agenda, Telegram captions) instead of ae/oe/ue/ss | - | [docs](docs/GLYPHS.md) |
+| 🖼️ `info-screens` | Full-screen information pages that take turns with the Agenda on its schedule (the base for the pages below) | - | [docs](docs/INFO_SCREENS.md) |
+| 🧹 `chore-wheel` | Chore wheel page: who does which chore this week, a donut wheel and one card per chore, rotating by calendar week | - | [docs](docs/CHORE_WHEEL.md) |
+| ⛅ `weather-screen` | A full-screen weather page: today as a big icon and temperature, and the next four days | - | [docs](docs/WEATHER_SCREEN.md) |
+| 💡 `fact-of-the-day` | One fact a day on a full-screen page - built-in facts (English and German) or your own list, with an optional question to think about | - | [docs](docs/FACT_OF_THE_DAY.md) |
+| 💶 `finance-snapshot` | A full-screen exchange-rate page: ECB reference rates of up to four currencies against the euro with the daily change and a 30-day line | - | [docs](docs/FINANCE_SNAPSHOT.md) |
+| 📈 `market-quotes` | A full-screen markets page: up to four stocks, ETFs, indices, crypto or currency pairs with the last price, the daily change and a 30-day line - Yahoo Finance without a key, with Twelve Data and Alpha Vantage (free keys) as fallbacks | - | [docs](docs/MARKET_QUOTES.md) |
+| ⛽ `fuel-prices` | A full-screen fuel-price page: the cheapest petrol stations around your place with the price like on the pump - Germany only, needs a free Tankerkoenig API key | - | [docs](docs/FUEL_PRICES.md) |
+| 🚗 `route-time` | The travel time there and back between two addresses in the header of the fuel page, with the traffic of now (TomTom, HERE; a free key), a way that takes longer than usual as a red block with a "!" | - | [docs](docs/ROUTE_TIME.md) |
+| 🖋️ `text-outline` | The weather and headline overlays and the captions can be drawn as text alone, without a bar: white text with a black border or black text with a white border, 1 or 2 pixels wide, weather icons with the same border ([docs](docs/TEXT_OUTLINE.md)) |
+| 🍲 `recipes` | A full-screen recipe page: one cooking recipe with its picture from Chefkoch (recipe of the day or a search with filters; German) or TheMealDB (English), the ingredients and the preparation in the biggest text that fits, landscape and portrait, with an optional QR code | - | [docs](docs/RECIPES.md) |
+| 🖌️ `artworks` | A rotation mode with a painting, drawing or print from the Rijksmuseum, SMK or the Smithsonian (public domain / CC0), kept in an album for wakes without network, with a small caption | - | [docs](docs/ARTWORKS.md) |
+| 🗓️ `schedule-pages` | Each Agenda schedule can draw its own pages (the Agenda, weather, fuel prices, ...); the schedule with the smaller number wins when two overlap, and a minimum time keeps one display from replacing another at once - nothing changes until a schedule is given pages | - | [docs](docs/SCHEDULE_PAGES.md) |
+| ♊ `upload-dedup` | The same image uploaded twice is refused (or flagged): a per-album MD5 index, optionally by the decoded pixels, background indexing of earlier images and a duplicate report | - | [docs](docs/UPLOAD_DEDUP.md) |
+| 📤 `multi-upload` | Upload a whole selection of photos in the Web UI, or pre-rendered EPDGZ/PNG files (e.g. from `process-cli`) as they are | - | [docs](docs/MULTI_UPLOAD.md) |
 | 🛠️ `fixes` | General bug fixes and robustness improvements over upstream | - | [docs](docs/FIXES.md) |
+
+### What it looks like
+
+<table>
+<tr>
+<td><a href="docs/SCREENSHOTS.md"><img src="docs/screens/agenda-grid-a.png" width="330" alt="The Agenda as a 7-day grid"></a></td>
+<td><a href="docs/SCREENSHOTS.md"><img src="docs/screens/info-weather.png" width="330" alt="The weather page"></a></td>
+</tr>
+<tr>
+<td><a href="docs/SCREENSHOTS.md"><img src="docs/screens/info-chore-wheel.png" width="330" alt="The chore wheel page"></a></td>
+<td><a href="docs/SCREENSHOTS.md"><img src="docs/screens/info-markets.png" width="330" alt="The markets page"></a></td>
+</tr>
+</table>
+
+The Agenda's layouts and colour profiles and every information page, drawn with sample data by the firmware's own code:
+[docs/SCREENSHOTS.md](docs/SCREENSHOTS.md).
 
 ## Ecosystem
 
@@ -224,7 +265,7 @@ This one-line merged-image flash **erases WiFi credentials and all settings** (i
 
 **Build from source:**
 
-We provide a `build.py` helper script to simplify building for different boards. With no `--with`/`--all-features` option it builds the plain upstream firmware; see [Optional Features](#optional-features) above for adding any of the 16 build flags.
+We provide a `build.py` helper script to simplify building for different boards. With no `--with`/`--all-features` option it builds the plain upstream firmware; see [Optional Features](#optional-features) above for adding any of the build flags.
 
 ```bash
 # Build for Waveshare PhotoPainter (default)
@@ -353,6 +394,9 @@ This project is based on the ESP32-S3-PhotoPainter sample code. Please refer to 
 - Original PhotoPainter sample: Waveshare ESP32-S3-PhotoPainter
 - E-paper drivers: Waveshare
 - ESP-IDF: Espressif Systems
+- Recipe page (`recipes`, optional): the text is set in [Noto Sans](https://fonts.google.com/noto) (SIL Open Font License 1.1, see
+  [docs/third_party/NotoSans-OFL.txt](docs/third_party/NotoSans-OFL.txt)); the recipes and pictures come from Chefkoch and [TheMealDB](https://www.themealdb.com) and belong to their
+  authors (see [docs/RECIPES.md](docs/RECIPES.md))
 - Weather condition icons (Settings → Overlays → "Weather condition display", optional): two
   selectable sets, both re-rendered at a small fixed size for this project's overlay bar (see
   `scripts/generate_weather_icons.py`) -

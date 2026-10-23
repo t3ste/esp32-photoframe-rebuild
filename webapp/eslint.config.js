@@ -12,6 +12,7 @@ export default [
       "src/components/AlbumGallery.vue",
       "src/components/ImageProcessing.vue",
       "src/components/ImageUpload.vue",
+      "src/components/RotationSchedule.vue",
       "src/components/SettingsPanel.vue",
       "src/stores/app.js",
       "src/stores/settings.js",

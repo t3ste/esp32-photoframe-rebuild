@@ -24,6 +24,19 @@ import {
   zoneForRule,
 } from "../utils/timezone";
 import { wideEdit } from "../utils/uiPrefs";
+// #if FEATURE_MARKET_QUOTES
+import { isMarketKey } from "../utils/marketKey";
+// #endif
+// #if FEATURE_ARTWORKS
+import { isArtAlbumName, isArtKey } from "../utils/artKey";
+// #endif
+// #if FEATURE_ROUTE_TIME
+import { nextTick, reactive } from "vue";
+import { isRouteKey } from "../utils/routeKey";
+// #endif
+// #if FEATURE_RECIPES
+import { isMealDbKey } from "../utils/recipeKey";
+// #endif
 // #if FORK_FIXES
 import { pickZone, rememberZone } from "../utils/zonePick";
 // #endif
@@ -125,6 +138,33 @@ const scheduleValid = computed(() => {
 const browserZone = browserTimeZone();
 const browserZoneKnown = ruleForZone(browserZone) !== null;
 const showAdvancedTz = ref(false);
+const trustingCert = ref(false);
+const trustCertResult = ref(null); // { ok, text }
+
+// Re-runs the frame's trust decision for the current image URL (needed after a
+// self-signed server changed its certificate; saving an unchanged URL does nothing).
+async function trustCertificate() {
+  trustingCert.value = true;
+  trustCertResult.value = null;
+  try {
+    const response = await fetch("/api/trust-certificate", { method: "POST" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.message || `HTTP ${response.status}`);
+    }
+    // Only the certificate state changed; a reload would discard unsaved edits.
+    settingsStore.deviceSettings.caCertSet = !!data.ca_cert_set;
+    settingsStore.deviceSettings.lastFetchError = "";
+    trustCertResult.value = {
+      ok: true,
+      text: data.ca_cert_set ? "Certificate pinned." : "Verified by a public CA; no pin needed.",
+    };
+  } catch (error) {
+    trustCertResult.value = { ok: false, text: error.message };
+  } finally {
+    trustingCert.value = false;
+  }
+}
 
 const timezoneRule = computed(() => settingsStore.deviceSettings.timezone);
 // Only an edited rule is checked: a value an older firmware let through must
@@ -643,6 +683,43 @@ const calendarCEnabledModel = extraCalEnabledModel("c");
 const calendarDEnabledModel = extraCalEnabledModel("d");
 const calendarEEnabledModel = extraCalEnabledModel("e");
 
+// The Agenda tab is a list of sections; the ones that were open are remembered in this browser
+// (a convenience: without storage every visit starts with all of them closed).
+const AGENDA_PANELS_KEY = "agendaPanels";
+function loadAgendaPanels() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(AGENDA_PANELS_KEY));
+    if (Array.isArray(saved)) return saved.filter((name) => typeof name === "string");
+  } catch {
+    /* no storage: all sections start closed */
+  }
+  return [];
+}
+const agendaPanels = ref(loadAgendaPanels());
+watch(agendaPanels, (open) => {
+  try {
+    localStorage.setItem(AGENDA_PANELS_KEY, JSON.stringify(open));
+  } catch {
+    /* not kept */
+  }
+});
+// What each section's header says about its state, so a closed section still tells.
+const agendaTodoSummary = computed(() => (settingsStore.deviceSettings.agendaTodoEnabled ? "on" : "off"));
+const agendaCalendarSummary = computed(() =>
+  settingsStore.deviceSettings.agendaCalEnabled ? "on" : "off"
+);
+const agendaExtraCalSummary = computed(() => {
+  const ds = settingsStore.deviceSettings;
+  // they are shown in the Calendar's column: with the Calendar off they do nothing, whatever they say
+  if (!ds.agendaCalEnabled) return "off";
+  const on = [ds.agendaCalCEnabled, ds.agendaCalDEnabled, ds.agendaCalEEnabled].filter(Boolean);
+  return on.length ? `${on.length} of 3 on` : "off";
+});
+const agendaScheduleSummary = computed(() => {
+  const count = settingsStore.deviceSettings.agendaCron.length;
+  return count === 1 ? "1 schedule" : count ? `${count} schedules` : "none";
+});
+
 // #endif
 const rotationModeOptions = computed(() => {
 // #if FEATURE_TELEGRAM
@@ -652,6 +729,12 @@ const rotationModeOptions = computed(() => {
   ];
 // #else
   const options = [{ title: "URL - Fetch image from URL", value: "url" }];
+// #endif
+// #if FEATURE_ARTWORKS
+  options.push({
+    title: "Artworks - A painting, drawing or print from a museum",
+    value: "artworks",
+  });
 // #endif
   if (appStore.systemInfo.sdcard_inserted || appStore.systemInfo.has_flash_storage) {
     options.unshift({ title: "Storage - Rotate through images", value: "storage" });
@@ -663,42 +746,6 @@ const sdRotationModeOptions = [
   { title: "Random - Shuffle images", value: "random" },
   { title: "Sequential - In sequence", value: "sequential" },
 ];
-
-// #if FEATURE_TELEGRAM
-// Removes the Telegram bot token / chat ID from the frame (write-only, there is no way to read them back).
-async function removeTelegramBotToken() {
-  try {
-    const response = await fetch("/api/config", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ telegram_bot_token_clear: true }),
-    });
-    if (response.ok) {
-      settingsStore.deviceSettings.telegramBotTokenConfigured = false;
-      settingsStore.deviceSettings.telegramConfigured = false;
-      settingsStore.deviceSettings.telegramBotToken = "";
-    }
-  } catch {
-    /* the frame is not reachable: the token stays */
-  }
-}
-async function removeTelegramChatId() {
-  try {
-    const response = await fetch("/api/config", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ telegram_chat_id_clear: true }),
-    });
-    if (response.ok) {
-      settingsStore.deviceSettings.telegramChatIdConfigured = false;
-      settingsStore.deviceSettings.telegramConfigured = false;
-      settingsStore.deviceSettings.telegramChatId = "";
-    }
-  } catch {
-    /* the frame is not reachable: the chat ID stays */
-  }
-}
-// #endif
 
 const saving = ref(false);
 const saveSuccess = ref(false);
@@ -754,8 +801,8 @@ async function resetDisplayHistory() {
 }
 
 // #endif
-// #if FORK_FIXES || FEATURE_AGENDA
-// Also declared without the `fixes` option: exportConfig() below reads it for the Agenda's fields
+// #if FORK_FIXES || FEATURE_AGENDA || FEATURE_ROUTE_TIME
+// Also declared without the `fixes` option: exportConfig() below reads it for the Agenda's and the route fields
 // (off, so they are always left out of the export - there is no checkbox without `fixes`).
 // Default OFF: an export is downloaded to disk as plaintext JSON, so
 // credentials should only end up in it when the user explicitly opts in
@@ -821,6 +868,15 @@ async function exportConfig() {
 // #endif
       exported.config = config;
     }
+// #if FEATURE_ROUTE_TIME
+    // The addresses are as private as the keys: only an export that includes the credentials keeps them.
+    if (exported.config && !exportIncludeSecrets.value) {
+      delete exported.config.route_from;
+      delete exported.config.route_to;
+      delete exported.config.route_from_found;
+      delete exported.config.route_to_found;
+    }
+// #endif
 // #if FEATURE_AGENDA
     // ToDo/Calendar URLs are write-only at the device level (GET /api/config
     // never returns them - either can carry a credential embedded as a
@@ -929,6 +985,657 @@ async function clearDebugLog() {
   }
 }
 
+// #if FEATURE_INFO_SCREENS
+// The names of the pages, in the list of the Agenda tab and for the schedules. "agenda" is its own
+// internal name (also the settings tab and the schedule section are called "Agenda"), but the page
+// it names is specifically the ToDo + Calendar page - labelled accordingly to tell the two apart.
+const infoScreenLabels = {
+  agenda: "ToDo & Calendar",
+  "chore-wheel": "Chore wheel",
+  weather: "Weather",
+  fact: "Fact of the day",
+  finance: "Exchange rates",
+  fuel: "Fuel prices",
+  markets: "Markets",
+  recipe: "Recipe",
+};
+// ToDo & Calendar has no tick of its own under Information screens (its ToDo and Calendar
+// sections above already each have one, and a third one for the combined page only duplicated
+// them and could disagree with both - ToDo and Calendar on, this one off, and the data neither
+// section promises would silently never show): it is on exactly when ToDo or Calendar is.
+const agendaPageAvailable = computed(
+  () => settingsStore.deviceSettings.agendaTodoEnabled || settingsStore.deviceSettings.agendaCalEnabled
+);
+// Whether a page is available right now, wherever that matters for the schedule below: ToDo &
+// Calendar per agendaPageAvailable, every other page by its own tick under Information screens.
+function pageAvailable(name) {
+  return name === "agenda" ? agendaPageAvailable.value : settingsStore.deviceSettings.infoScreens.includes(name);
+}
+// A page's own settings are shown only while the page is ticked.
+const infoScreenOn = (name) => settingsStore.deviceSettings.infoScreens.includes(name);
+const infoScreenSummary = computed(() => {
+  // "agenda" has no tick in this list anymore (see agendaPageAvailable) - left out here too, even
+  // though it may still be in the stored list from before this changed.
+  const names = settingsStore.deviceSettings.infoScreens.filter((name) => name !== "agenda");
+  return names.length ? names.map((name) => infoScreenLabels[name] || name).join(", ") : "none";
+});
+// #if FEATURE_SCHEDULE_PAGES
+// A schedule's own pages, restricted to the ones available right now (see pageAvailable) - a page
+// since made unavailable does not count as one of this schedule's pages anymore, same as the
+// firmware's info_screens_next_for() already treats it (it falls back to the shared rotation).
+function schedulePagesOf(index) {
+  return (settingsStore.deviceSettings.agendaCronPages[index] || []).filter(pageAvailable);
+}
+// Whether any schedule has a page that would actually draw right now - not merely "was given
+// one", which can be stale (see the agenda_manager.c fix this mirrors).
+const schedulePagesEffective = computed(() =>
+  settingsStore.deviceSettings.agendaCron.some((_, i) => schedulePagesOf(i).length > 0)
+);
+// #endif
+// The schedule of the Agenda also drives the information screens, so it is not greyed out while
+// one of them is in the rotation.
+const agendaScheduleDisabled = computed(
+  () =>
+    !(
+      agendaPageAvailable.value ||
+      // #if FEATURE_SCHEDULE_PAGES
+      schedulePagesEffective.value ||
+      // #endif
+      settingsStore.deviceSettings.infoScreens.some((name) => name !== "agenda")
+    )
+);
+// #if FEATURE_SCHEDULE_PAGES
+// The pages a schedule can be given: the ones this firmware has, with the names of the page list.
+// `enabled` is false for a page not available right now (see pageAvailable) - the chip stays
+// visible (so an existing, now-stale pick of it is still shown, not silently dropped) but greyed
+// out and unclickable; RotationSchedule.vue reads it as its own `disabled` per chip.
+const schedulePageItems = computed(() =>
+  settingsStore.deviceSettings.infoScreensAvailable.map((name) => ({
+    value: name,
+    title: infoScreenLabels[name] || name,
+    enabled: pageAvailable(name),
+  }))
+);
+// A page that is available (ToDo & Calendar, or ticked under Information screens) but would never
+// actually be drawn: every schedule has its own (actually available) pages, and none of them
+// include it, so the shared rotation - the only other way a page gets shown - never runs. Empty
+// while at least one schedule has no available pages of its own (it falls back to the shared
+// rotation, which then still shows everything that is available).
+const orphanedActivePages = computed(() => {
+  const ds = settingsStore.deviceSettings;
+  const count = ds.agendaCron.length;
+  if (!count) {
+    return [];
+  }
+  const perSchedule = ds.agendaCron.map((_, i) => schedulePagesOf(i));
+  if (!perSchedule.every((names) => names.length)) {
+    return [];
+  }
+  const assigned = new Set(perSchedule.flat());
+  const active = [];
+  if (agendaPageAvailable.value && !assigned.has("agenda")) {
+    active.push("agenda");
+  }
+  for (const name of ds.infoScreens) {
+    if (name !== "agenda" && !assigned.has(name)) {
+      active.push(name);
+    }
+  }
+  return [...new Set(active)].map((name) => infoScreenLabels[name] || name);
+});
+// #endif
+// #endif
+// #if FEATURE_TELEGRAM
+// Removes the Telegram bot token / chat ID from the frame (write-only, there is no way to read them back).
+async function removeTelegramBotToken() {
+  try {
+    const response = await fetch("/api/config", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ telegram_bot_token_clear: true }),
+    });
+    if (response.ok) {
+      settingsStore.deviceSettings.telegramBotTokenConfigured = false;
+      settingsStore.deviceSettings.telegramConfigured = false;
+      settingsStore.deviceSettings.telegramBotToken = "";
+    }
+  } catch {
+    /* the frame is not reachable: the token stays */
+  }
+}
+async function removeTelegramChatId() {
+  try {
+    const response = await fetch("/api/config", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ telegram_chat_id_clear: true }),
+    });
+    if (response.ok) {
+      settingsStore.deviceSettings.telegramChatIdConfigured = false;
+      settingsStore.deviceSettings.telegramConfigured = false;
+      settingsStore.deviceSettings.telegramChatId = "";
+    }
+  } catch {
+    /* the frame is not reachable: the chat ID stays */
+  }
+}
+// #endif
+// #if FEATURE_FUEL_PRICES
+// Removes the API key of the fuel page from the frame (the key is write-only, there is no way to read it).
+async function removeFuelApiKey() {
+  try {
+    const response = await fetch("/api/config", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fuel_api_key_clear: true }),
+    });
+    if (response.ok) {
+      settingsStore.deviceSettings.fuelApiKeyConfigured = false;
+      settingsStore.deviceSettings.fuelApiKey = "";
+    }
+  } catch {
+    /* the frame is not reachable: the key stays */
+  }
+}
+// #endif
+// #if FEATURE_MARKET_QUOTES
+// A key of Twelve Data or Alpha Vantage: letters and digits, 4 to 64 (what the frame accepts).
+const marketKeyRule = (value) =>
+  !value || isMarketKey(value) || "Letters and digits only, 4 to 64 characters";
+
+// Removes one of the two API keys from the frame (they are write-only, there is no way to read them).
+async function removeMarketKey(which) {
+  try {
+    const response = await fetch("/api/config", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [`market_key_${which}_clear`]: true }),
+    });
+    if (response.ok) {
+      const name = which === "twelvedata" ? "Twelvedata" : "Alphavantage";
+      settingsStore.deviceSettings[`marketKey${name}Configured`] = false;
+      settingsStore.deviceSettings[`marketKey${name}`] = "";
+    }
+  } catch {
+    /* the frame is not reachable: the key stays */
+  }
+}
+// #endif
+// #if FEATURE_RECIPES
+// What the recipe page offers: the names are those of the frame (main/recipe_source.c). The words of
+// the Chefkoch filters are German because Chefkoch is: they are what the search is asked for.
+const recipeSourceItems = [
+  { title: "Chefkoch - recipe of the day (German)", value: "day" },
+  { title: "Chefkoch - search with filters (German)", value: "search" },
+  { title: "TheMealDB - by category (English)", value: "mealdb" },
+];
+const recipeVariantItems = [
+  { title: "Classic", value: "classic" },
+  { title: "Vegetarian", value: "vegetarian" },
+  { title: "Vegan", value: "vegan" },
+];
+const recipeFilterItems = (names) => [
+  { title: "No filter", value: "" },
+  ...names.map((name) => ({ title: name, value: name })),
+];
+const recipePropertyItems = recipeFilterItems(["Einfach", "Schnell", "Basisrezepte", "Preiswert"]);
+const recipeHealthItems = recipeFilterItems([
+  "Vegetarisch",
+  "Vegan",
+  "Kalorienarm",
+  "Low Carb",
+  "Ketogen",
+  "Paleo",
+  "Fettarm",
+  "Vollwert",
+]);
+const recipeCategoryItems = recipeFilterItems([
+  "Auflauf",
+  "Pizza",
+  "Salat",
+  "Tarte",
+  "Fingerfood",
+  "Dips",
+  "Saucen",
+  "Suppe",
+  "Brot und Brötchen",
+  "Süßspeise",
+  "Kuchen",
+  "Torte",
+  "Getränke",
+]);
+const recipeCountryItems = recipeFilterItems([
+  "Deutschland",
+  "Italien",
+  "Spanien",
+  "Frankreich",
+  "Griechenland",
+  "Türkei",
+  "Asien",
+  "Indien",
+  "Japan",
+  "Mexiko",
+]);
+const recipeMealItems = recipeFilterItems([
+  "Hauptspeise",
+  "Vorspeise",
+  "Beilage",
+  "Dessert",
+  "Snack",
+  "Frühstück",
+]);
+const recipeTimeItems = [
+  { title: "No limit", value: 0 },
+  { title: "Up to 15 minutes", value: 15 },
+  { title: "Up to 30 minutes", value: 30 },
+  { title: "Up to 1 hour", value: 60 },
+  { title: "Up to 2 hours", value: 120 },
+];
+const recipeRatingItems = [
+  { title: "Any", value: 0 },
+  { title: "2 stars and more", value: 20 },
+  { title: "3 stars and more", value: 30 },
+  { title: "4 stars and more", value: 40 },
+  { title: "Top (4.5 and more)", value: 45 },
+];
+const recipeSortItems = [
+  { title: "Recommended", value: "recommended" },
+  { title: "Best rated", value: "rating" },
+  { title: "Newest", value: "newest" },
+];
+const recipeMealdbItems = [
+  { title: "Any category (a random recipe)", value: "" },
+  ...[
+    "Beef",
+    "Breakfast",
+    "Chicken",
+    "Dessert",
+    "Goat",
+    "Lamb",
+    "Miscellaneous",
+    "Pasta",
+    "Pork",
+    "Seafood",
+    "Side",
+    "Starter",
+    "Vegan",
+    "Vegetarian",
+  ].map((name) => ({ title: name, value: name })),
+];
+const mealDbKeyRule = (value) =>
+  !value || isMealDbKey(value) || "Letters and digits only, up to 24 characters";
+
+// Removes the personal key of TheMealDB from the frame (it is write-only, there is no way to read it).
+async function removeMealDbKey() {
+  try {
+    const response = await fetch("/api/config", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ recipe_mealdb_key_clear: true }),
+    });
+    if (response.ok) {
+      settingsStore.deviceSettings.recipeMealdbKeyConfigured = false;
+      settingsStore.deviceSettings.recipeMealdbKey = "";
+    }
+  } catch {
+    /* the frame is not reachable: the key stays */
+  }
+}
+// #endif
+// #if FEATURE_ROUTE_TIME
+// The travel time on the fuel page: look an address up, choose among the places found, let the frame
+// check the route between the two, adopt the times as the usual ones.
+const routeKeyRule = (value) =>
+  !value || isRouteKey(value) || "Letters, digits, - and _, 16 to 104 characters";
+
+const routeEnds = [
+  { which: 0, label: "Start address", model: "routeFrom", found: "routeFromFound" },
+  { which: 1, label: "Destination address", model: "routeTo", found: "routeToFound" },
+];
+const routeState = reactive({
+  busy: false,
+  candidates: [[], []], // the places a lookup found, per end
+  choice: [-1, -1], // the one chosen, per end
+  lookup: ["", ""], // what the last lookup said, per end
+  check: null, // the answer of the last successful check
+  message: "", // why the last check failed
+  lookedUp: ["", ""], // the text each list of places was found for
+  checkedText: ["", ""], // the text each end had when the frame took its place over
+  checking: false, // a check is writing its result: the watch below must not read the fields meanwhile
+});
+const routeText = (which) =>
+  (which === 0
+    ? settingsStore.deviceSettings.routeFrom
+    : settingsStore.deviceSettings.routeTo
+  ).trim();
+// A place is only offered for the text it was found for: an address that is edited afterwards must
+// be looked up again, or the frame would be given a place that is not the one typed.
+const routeReady = computed(() =>
+  routeEnds.every(
+    (end) =>
+      routeState.choice[end.which] >= 0 &&
+      routeState.candidates[end.which][routeState.choice[end.which]] &&
+      routeState.lookedUp[end.which] === routeText(end.which)
+  )
+);
+// What the frame holds as taken over counts only while the text is still the one it was taken over for.
+function routeTakenOver(end) {
+  const ds = settingsStore.deviceSettings;
+  return ds.routeChecked && !!ds[end.found] && routeState.checkedText[end.which] === routeText(end.which);
+}
+watch(
+  () => [
+    settingsStore.deviceSettings.routeChecked,
+    settingsStore.deviceSettings.routeFromFound,
+    settingsStore.deviceSettings.routeToFound,
+  ],
+  () => {
+    // the settings were loaded: the texts now are the ones that were taken over (a check names its own)
+    if (!routeState.checking) routeState.checkedText = [routeText(0), routeText(1)];
+  },
+  { immediate: true }
+);
+for (const end of routeEnds) {
+  watch(
+    () => routeText(end.which),
+    (text) => {
+      if (text !== routeState.lookedUp[end.which]) {
+        routeState.candidates[end.which] = [];
+        routeState.choice[end.which] = -1;
+        routeState.lookup[end.which] = "";
+      }
+      // the last check was for the addresses as they were: its times are not those of this route
+      if (text !== routeState.checkedText[end.which]) routeState.check = null;
+    }
+  );
+}
+
+const routeReasons = {
+  no_key: "Enter the key of TomTom or HERE below first.",
+  key_refused: "The service refused the key. Check that it was copied completely and is still valid.",
+  quota: "The service has no requests left for now. Try again later.",
+  not_found: "No address or street found. Add the street, the house number and the town.",
+  implausible: "The route between the two places does not look right. Check both addresses.",
+  no_places: "Choose a place for both ends first.",
+  failed: "The service did not answer. Try again.",
+};
+function routeReason(answer) {
+  const text = routeReasons[answer.status] || "Something went wrong.";
+  return answer.message ? `${text} (${answer.message})` : text;
+}
+
+async function routePost(path, body) {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return response.json();
+}
+
+async function routeLookup(which) {
+  const text = (which === 0 ? settingsStore.deviceSettings.routeFrom : settingsStore.deviceSettings.routeTo)
+    .trim();
+  routeState.candidates[which] = [];
+  routeState.choice[which] = -1;
+  routeState.lookup[which] = "";
+  routeState.lookedUp[which] = text;
+  if (!text) {
+    routeState.lookup[which] = "Type an address first.";
+    return;
+  }
+  routeState.busy = true;
+  try {
+    const answer = await routePost("/api/route/geocode", { text });
+    if (answer.status === "ok" && answer.places && answer.places.length) {
+      routeState.candidates[which] = answer.places;
+      routeState.choice[which] = 0;
+      routeState.lookup[which] =
+        answer.places.length === 1
+          ? `Found by ${answer.source}. Is this the place?`
+          : `${answer.places.length} places found by ${answer.source}: choose yours.`;
+    } else {
+      routeState.lookup[which] = routeReason(answer);
+    }
+  } catch {
+    routeState.lookup[which] = "The frame did not answer.";
+  } finally {
+    routeState.busy = false;
+  }
+}
+
+async function routeCheck() {
+  if (!routeReady.value) return;
+  const ds = settingsStore.deviceSettings;
+  const from = routeState.candidates[0][routeState.choice[0]];
+  const to = routeState.candidates[1][routeState.choice[1]];
+  routeState.busy = true;
+  routeState.message = "";
+  routeState.check = null;
+  const sentTexts = [routeText(0), routeText(1)]; // what the frame is given, whatever is typed meanwhile
+  try {
+    const answer = await routePost("/api/route/check", {
+      from_text: sentTexts[0],
+      from,
+      to_text: sentTexts[1],
+      to,
+    });
+    if (answer.status === "ok") {
+      routeState.checking = true;
+      ds.routeChecked = true;
+      ds.routeFrom = ds.routeFrom.trim();
+      ds.routeTo = ds.routeTo.trim();
+      ds.routeFromFound = from.label;
+      ds.routeToFound = to.label;
+      routeState.checkedText = sentTexts;
+      // only an answer for the addresses that are still typed is offered for the times
+      if (routeText(0) === sentTexts[0] && routeText(1) === sentTexts[1]) {
+        routeState.check = answer;
+        // a first time to go by: the times of now, to be adopted as they are or changed
+        if (!ds.routeRefThereMin) ds.routeRefThereMin = answer.there_min;
+        if (!ds.routeRefBackMin) ds.routeRefBackMin = answer.back_min;
+      }
+      await nextTick(); // the watch on the fields has run (and left them alone) by now
+    } else {
+      routeState.message = routeReason(answer);
+    }
+  } catch {
+    routeState.message = "The frame did not answer.";
+  } finally {
+    routeState.checking = false;
+    routeState.busy = false;
+  }
+}
+
+// kind: "now" (the times of the last check) or "free" (the same without traffic)
+function routeAdopt(kind) {
+  const check = routeState.check;
+  if (!check) return;
+  const ds = settingsStore.deviceSettings;
+  ds.routeRefThereMin = kind === "free" ? check.free_there_min : check.there_min;
+  ds.routeRefBackMin = kind === "free" ? check.free_back_min : check.back_min;
+}
+
+async function removeRouteKey(which) {
+  try {
+    const response = await fetch("/api/config", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [`route_key_${which}_clear`]: true }),
+    });
+    if (response.ok) {
+      const name = which === "tomtom" ? "Tomtom" : "Here";
+      settingsStore.deviceSettings[`routeKey${name}Configured`] = false;
+      settingsStore.deviceSettings[`routeKey${name}`] = "";
+    }
+  } catch {
+    /* the frame is not reachable: the key stays */
+  }
+}
+// #endif
+// #if FEATURE_ARTWORKS
+// A bit of a mask setting (kinds of work, sources) as a check box.
+function artMaskModel(field, bit) {
+  return computed({
+    get: () => (settingsStore.deviceSettings[field] & bit) !== 0,
+    set: (on) => {
+      const mask = settingsStore.deviceSettings[field];
+      settingsStore.deviceSettings[field] = on ? mask | bit : mask & ~bit;
+    },
+  });
+}
+const artScaleOptions = [
+  { title: "Fit - the whole picture, with bars where it does not fill the panel", value: "fit" },
+  { title: "Cover - fill the panel, cut off the edges", value: "cover" },
+];
+const artPaintingModel = artMaskModel("artTypes", 1);
+const artDrawingModel = artMaskModel("artTypes", 2);
+const artPrintModel = artMaskModel("artTypes", 4);
+const artRijksModel = artMaskModel("artSources", 1);
+const artSmkModel = artMaskModel("artSources", 2);
+const artSmithsonianModel = artMaskModel("artSources", 4);
+
+const artKeyRule = (value) =>
+  !value || isArtKey(value) || "Letters, digits and _ only, 4 to 64 characters";
+const artAlbumRule = (value) =>
+  isArtAlbumName(value) || "Letters, digits, blank, - and _, up to 31 characters";
+const artLimitsRule = () =>
+  settingsStore.deviceSettings.artFreeTarget > settingsStore.deviceSettings.artFreeMin ||
+  "The clean-up level must be above the minimum";
+
+// Removes the Smithsonian key from the frame (it is write-only, there is no way to read it).
+async function removeArtKey() {
+  try {
+    const response = await fetch("/api/config", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ art_si_key_clear: true }),
+    });
+    if (response.ok) {
+      settingsStore.deviceSettings.artSiKeyConfigured = false;
+      settingsStore.deviceSettings.artSiKey = "";
+    }
+  } catch {
+    /* the frame is not reachable: the key stays */
+  }
+}
+// #endif
+// #if FEATURE_FACT_OF_THE_DAY
+// The user's own facts (docs/FACT_OF_THE_DAY.md): one text file on the frame, not part of the settings.
+const factsText = ref("");
+const factsBusy = ref(false);
+const factsMessage = ref("");
+
+async function loadFacts() {
+  try {
+    const response = await fetch("/api/facts");
+    if (response.ok) factsText.value = await response.text();
+  } catch {
+    /* the frame is not reachable: leave the box empty */
+  }
+}
+
+async function saveFacts() {
+  factsBusy.value = true;
+  factsMessage.value = "";
+  try {
+    const response = await fetch("/api/facts", {
+      method: "PUT",
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+      body: factsText.value,
+    });
+    if (response.ok) {
+      const result = await response.json();
+      factsMessage.value = result.facts
+        ? `Saved ${result.facts} fact(s)` +
+          (result.skipped ? `, ${result.skipped} line(s) skipped` : "")
+        : "Removed - the built-in facts are used";
+    } else {
+      factsMessage.value = (await response.text()) || "Could not save the facts";
+    }
+  } catch {
+    factsMessage.value = "Could not reach the frame";
+  } finally {
+    factsBusy.value = false;
+  }
+}
+onMounted(loadFacts);
+// #endif
+// #if FEATURE_UPLOAD_DEDUP
+// Duplicate images: index the images that were there before, and list what an album has twice.
+const dedupAlbum = ref(""); // "" = every album (indexing); the report needs one
+const dedupStatus = ref(null); // { running, finished, album, total, done, indexed, failed }
+const dedupReport = ref(null); // { album, hash, images, indexed, groups: [[file, ...], ...] }
+const dedupBusy = ref(false);
+let dedupTimer = null;
+
+const dedupProgress = computed(() => {
+  const s = dedupStatus.value;
+  if (!s) return "";
+  if (s.running) return `Indexing ${s.album || "..."}: ${s.done} of ${s.total} images`;
+  if (!s.finished) return "";
+  return `Indexed ${s.indexed} new image(s)${s.failed ? `, ${s.failed} could not be read` : ""}`;
+});
+
+async function dedupPollStatus() {
+  clearTimeout(dedupTimer);
+  try {
+    const response = await fetch("/api/dedup/status");
+    if (response.ok) dedupStatus.value = await response.json();
+  } catch (_error) {
+    // the frame is busy: the next poll will do
+  }
+  if (dedupStatus.value?.running) dedupTimer = setTimeout(dedupPollStatus, 1500);
+}
+
+async function dedupStartIndexing() {
+  dedupBusy.value = true;
+  try {
+    const response = await fetch("/api/dedup/scan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ album: dedupAlbum.value }),
+    });
+    if (!response.ok && response.status !== 409) throw new Error(`HTTP ${response.status}`);
+    await dedupPollStatus();
+  } catch (error) {
+    showSnackbar(`Could not start the indexing: ${error.message}`, "error");
+  } finally {
+    dedupBusy.value = false;
+  }
+}
+
+async function dedupFindDuplicates() {
+  if (!dedupAlbum.value) return;
+  dedupBusy.value = true;
+  try {
+    const response = await fetch(
+      `/api/dedup/duplicates?album=${encodeURIComponent(dedupAlbum.value)}`
+    );
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    dedupReport.value = await response.json();
+  } catch (error) {
+    showSnackbar(`Could not list the duplicates: ${error.message}`, "error");
+  } finally {
+    dedupBusy.value = false;
+  }
+}
+
+async function dedupDelete(file) {
+  const report = dedupReport.value;
+  if (!report) return;
+  if (!(await appStore.deleteImage(report.album, file))) {
+    showSnackbar(`Could not delete ${file}`, "error");
+    return;
+  }
+  report.groups = report.groups
+    .map((group) => group.filter((name) => name !== file))
+    .filter((group) => group.length > 1);
+}
+
+onMounted(dedupPollStatus);
+onUnmounted(() => clearTimeout(dedupTimer));
+// #endif
 // #if FEATURE_FACECROP
 const organizingCropVariants = ref(false);
 
@@ -1833,9 +2540,40 @@ async function performFactoryReset() {
                         Certificate Pinned
                       </v-chip>
                       <div class="text-caption text-medium-emphasis">
-                        The TLS certificate for this HTTPS URL is pinned. It will re-pin
-                        automatically when you change the URL.
+                        No public CA vouches for this server, so its own certificate is pinned. If
+                        the server moves to a publicly trusted certificate the pin is dropped by
+                        itself; after a self-signed certificate changes, use Trust certificate below
+                        to accept the new one.
                       </div>
+                    </div>
+
+                    <div
+                      v-if="settingsStore.deviceSettings.imageUrl?.startsWith('https://')"
+                      class="mb-4 d-flex flex-wrap align-center ga-2"
+                    >
+                      <v-btn
+                        variant="tonal"
+                        size="small"
+                        prepend-icon="mdi-certificate"
+                        :loading="trustingCert"
+                        :disabled="!settingsStore.isImageUrlSaved()"
+                        @click="trustCertificate"
+                      >
+                        Trust certificate
+                      </v-btn>
+                      <span
+                        v-if="!settingsStore.isImageUrlSaved()"
+                        class="text-caption text-medium-emphasis"
+                      >
+                        Save the URL first.
+                      </span>
+                      <span
+                        v-else-if="trustCertResult"
+                        class="text-caption"
+                        :class="trustCertResult.ok ? 'text-success' : 'text-error'"
+                      >
+                        {{ trustCertResult.text }}
+                      </span>
                     </div>
 
                     <v-alert
@@ -1888,6 +2626,183 @@ async function performFactoryReset() {
                   </v-card-text>
                 </v-card>
               </v-expand-transition>
+<!-- #if FEATURE_ARTWORKS -->
+
+              <v-expand-transition>
+                <v-card
+                  v-if="
+                    settingsStore.deviceSettings.autoRotate &&
+                    settingsStore.deviceSettings.rotationMode === 'artworks'
+                  "
+                  variant="tonal"
+                  class="mb-4"
+                >
+                  <v-card-text>
+                    <div class="text-caption text-medium-emphasis mb-3">
+                      Each rotation shows a painting, drawing or print from a museum's open-access
+                      service: the kind of work is chosen first, then a random work that is public
+                      domain or CC0. Without network, or when something fails, a picture of the
+                      album below is shown instead - also when that album is switched off in the
+                      gallery.
+                    </div>
+                    <div class="text-subtitle-2 mb-1">Kinds of work</div>
+                    <v-checkbox
+                      v-model="artPaintingModel"
+                      label="Paintings"
+                      density="compact"
+                      hide-details
+                    />
+                    <v-checkbox
+                      v-model="artDrawingModel"
+                      label="Drawings"
+                      density="compact"
+                      hide-details
+                    />
+                    <v-checkbox
+                      v-model="artPrintModel"
+                      label="Prints"
+                      density="compact"
+                      hide-details
+                      class="mb-2"
+                    />
+                    <div class="text-subtitle-2 mb-1">Sources, asked in this order</div>
+                    <v-checkbox
+                      v-model="artRijksModel"
+                      label="Rijksmuseum"
+                      density="compact"
+                      hide-details
+                    />
+                    <v-checkbox
+                      v-model="artSmkModel"
+                      label="SMK (Statens Museum for Kunst)"
+                      density="compact"
+                      hide-details
+                    />
+                    <v-checkbox
+                      v-model="artSmithsonianModel"
+                      label="Smithsonian American Art Museum (paintings, drawings)"
+                      density="compact"
+                      hide-details
+                      class="mb-2"
+                    />
+                    <v-text-field
+                      v-model="settingsStore.deviceSettings.artSiKey"
+                      label="Smithsonian API key (optional)"
+                      :placeholder="
+                        settingsStore.deviceSettings.artSiKeyConfigured
+                          ? 'A key is saved'
+                          : 'Empty: the shared demo key (10 requests an hour)'
+                      "
+                      :rules="[artKeyRule]"
+                      type="password"
+                      autocomplete="off"
+                      variant="outlined"
+                      density="compact"
+                      hide-details="auto"
+                      class="mb-4"
+                    >
+                      <template v-if="settingsStore.deviceSettings.artSiKeyConfigured" #append-inner>
+                        <v-btn size="x-small" variant="text" @click="removeArtKey()">Remove</v-btn>
+                      </template>
+                    </v-text-field>
+                    <v-switch
+                      v-model="settingsStore.deviceSettings.artSave"
+                      label="Keep the pictures in an album"
+                      color="primary"
+                      density="compact"
+                      hide-details
+                    />
+                    <v-text-field
+                      v-model="settingsStore.deviceSettings.artAlbum"
+                      label="Album"
+                      :rules="[artAlbumRule]"
+                      maxlength="31"
+                      variant="outlined"
+                      density="compact"
+                      hide-details="auto"
+                      class="mb-2"
+                    />
+                    <div class="text-caption text-medium-emphasis mb-2">
+                      When the free space on the frame's storage is at or below the first level,
+                      the oldest pictures this mode saved are deleted before a new one is kept,
+                      until the second level is reached. Only pictures with their caption file in
+                      this album are ever deleted; your own pictures are not touched. If that is
+                      not enough, the new picture is shown but not kept.
+                    </div>
+                    <v-row dense>
+                      <v-col cols="6">
+                        <v-text-field
+                          v-model.number="settingsStore.deviceSettings.artFreeMin"
+                          label="Keep at least this much free (%)"
+                          type="number"
+                          min="5"
+                          max="80"
+                          :rules="[artLimitsRule]"
+                          variant="outlined"
+                          density="compact"
+                          hide-details="auto"
+                        />
+                      </v-col>
+                      <v-col cols="6">
+                        <v-text-field
+                          v-model.number="settingsStore.deviceSettings.artFreeTarget"
+                          label="Clean up to this much free (%)"
+                          type="number"
+                          min="6"
+                          max="95"
+                          variant="outlined"
+                          density="compact"
+                          hide-details="auto"
+                        />
+                      </v-col>
+                    </v-row>
+                    <v-switch
+                      v-model="settingsStore.deviceSettings.artCaption"
+                      label="Show a small caption (artist, title, year)"
+                      color="primary"
+                      density="compact"
+                      hide-details
+                      class="mt-2"
+                    />
+                    <v-select
+                      v-model="settingsStore.deviceSettings.artScaleMode"
+                      :items="artScaleOptions"
+                      item-title="title"
+                      item-value="value"
+                      label="Picture on the panel"
+                      variant="outlined"
+                      density="compact"
+                      hide-details
+                      class="mt-4"
+                    />
+                    <div class="text-caption text-medium-emphasis mt-1">
+                      Applies to the pictures this mode makes from now on, not to the ones already
+                      in the album. It is separate from the picture setting of the frame's other
+                      modes.
+                    </div>
+                    <v-switch
+                      v-model="settingsStore.deviceSettings.artMatchOrient"
+                      label="Prefer pictures that match the frame's orientation"
+                      color="primary"
+                      density="compact"
+                      hide-details
+                      class="mt-2"
+                    />
+                    <div class="text-caption text-medium-emphasis mt-1">
+                      Landscape pictures for a landscape frame, portrait ones for a portrait frame
+                      (the Display Orientation setting). The frame asks for up to three works to find one,
+                      and takes the last whatever its format; a picture from the album shown instead
+                      is chosen the same way. Off: every work is taken as it comes.
+                    </div>
+                    <div class="text-caption text-medium-emphasis mt-2">
+                      For private use. The pictures come from the museums' open-access services;
+                      the terms of use differ by museum and by work, and you are responsible for
+                      observing them and any credit they ask for.
+                    </div>
+                  </v-card-text>
+                </v-card>
+              </v-expand-transition>
+<!-- #endif -->
 <!-- #if FEATURE_TELEGRAM -->
 
               <v-expand-transition>
@@ -2177,697 +3092,1536 @@ async function performFactoryReset() {
               separate schedule.
             </v-alert>
 
-            <div class="text-subtitle-2 mb-2">ToDo</div>
-            <v-switch
-              v-model="settingsStore.deviceSettings.agendaTodoEnabled"
-              label="Show ToDo list"
-              color="primary"
-              class="mb-2"
-              hide-details
-            />
-            <div class="text-caption text-medium-emphasis mb-2">
-              A plain todo.txt file, re-checked every agenda wake - no API key needed. An unchanged
-              file is detected via a conditional request and skips re-downloading. Completed tasks
-              ("x " prefix) are never shown. Treated like a password field (never shown back to you)
-              since a private feed's URL can embed an access token, the same way a Google Calendar
-              link can.
-            </div>
-            <v-text-field
-              v-model="settingsStore.deviceSettings.agendaTodoUrl"
-              label="todo.txt URL"
-              type="password"
-              variant="outlined"
-              density="compact"
-              hint="Leave empty to keep the current URL"
-              persistent-hint
-              placeholder="••••••••"
-              class="mb-4"
-              :disabled="!settingsStore.deviceSettings.agendaTodoEnabled"
-            />
-
-            <v-divider class="mb-4" />
-
-            <div class="text-subtitle-2 mb-2">Calendar</div>
-            <v-switch
-              v-model="calendarAbEnabledModel"
-              label="Show upcoming events"
-              color="primary"
-              class="mb-2"
-              hide-details
-            />
-            <div class="text-caption text-medium-emphasis mb-2">
-              On a device with no calendar configured yet, enter a URL below first, then turn this
-              on - it can't be enabled with no source behind it. An iCalendar/ICS feed - e.g. a
-              Google Calendar "Secret address in iCal format" (Calendar Settings → Integrate
-              calendar). Google's own docs warn that only you should know this address - treat it
-              like a password, never share it. A second calendar is optional (e.g. work alongside
-              personal) - events from both are merged into one list, sorted by priority and time
-              (see "Calendar priority" below), and colored by origin: Calendar A is blue, Calendar B
-              is green (shown as a filled background on a light agenda background, plain colored
-              text on a dark one - see Appearance below).
-            </div>
-            <v-row dense>
-              <v-col cols="12" sm="6">
-                <v-text-field
-                  v-model="settingsStore.deviceSettings.agendaCalUrl"
-                  label="Calendar A ICS URL"
-                  type="password"
-                  variant="outlined"
-                  density="compact"
-                  hint="Leave empty to keep the current URL"
-                  persistent-hint
-                  placeholder="••••••••"
-                >
-                  <template #append-inner>
-                    <v-icon
-                      v-if="settingsStore.deviceSettings.agendaCalUrlConfigured"
-                      color="success"
-                      size="20"
-                      title="URL saved on device"
-                    >
-                      mdi-check-circle
-                    </v-icon>
+            <v-expansion-panels v-model="agendaPanels" multiple variant="accordion" class="mb-4">
+              <v-expansion-panel value="todo">
+                <v-expansion-panel-title>
+                  <span class="text-subtitle-2">ToDo</span>
+                  <span class="text-caption text-medium-emphasis ml-3">{{ agendaTodoSummary }}</span>
+                </v-expansion-panel-title>
+                <v-expansion-panel-text>
+                  <v-switch
+                    v-model="settingsStore.deviceSettings.agendaTodoEnabled"
+                    label="Show ToDo list"
+                    color="primary"
+                    class="mb-2"
+                    hide-details
+                  />
+                  <div class="text-caption text-medium-emphasis mb-2">
+                    A plain todo.txt file, re-checked every agenda wake - no API key needed. An unchanged
+                    file is detected via a conditional request and skips re-downloading. Completed tasks
+                    ("x " prefix) are never shown. Treated like a password field (never shown back to you)
+                    since a private feed's URL can embed an access token, the same way a Google Calendar
+                    link can.
+<!-- #if FEATURE_CALDAV_TODO -->
+                    A CalDAV task list of your own server works as well, written
+                    caldavs://user:password@host/path (caldav:// for plain http): its open to-dos show up
+                    with their priority and due date.
+<!-- #endif -->
+                  </div>
+                  <v-text-field
+                    v-model="settingsStore.deviceSettings.agendaTodoUrl"
+                    label="todo.txt URL"
+                    type="password"
+                    variant="outlined"
+                    density="compact"
+                    hint="Leave empty to keep the current URL"
+                    persistent-hint
+                    placeholder="••••••••"
+                    class="mb-4"
+                    :disabled="!settingsStore.deviceSettings.agendaTodoEnabled"
+                  />
+                </v-expansion-panel-text>
+              </v-expansion-panel>
+              <v-expansion-panel value="calendar">
+                <v-expansion-panel-title>
+                  <span class="text-subtitle-2">Calendar</span>
+                  <span class="text-caption text-medium-emphasis ml-3">{{ agendaCalendarSummary }}</span>
+                </v-expansion-panel-title>
+                <v-expansion-panel-text>
+                  <v-switch
+                    v-model="calendarAbEnabledModel"
+                    label="Show upcoming events"
+                    color="primary"
+                    class="mb-2"
+                    hide-details
+                  />
+                  <div class="text-caption text-medium-emphasis mb-2">
+                    On a device with no calendar configured yet, enter a URL below first, then turn this
+                    on - it can't be enabled with no source behind it. An iCalendar/ICS feed - e.g. a
+                    Google Calendar "Secret address in iCal format" (Calendar Settings → Integrate
+                    calendar). Google's own docs warn that only you should know this address - treat it
+                    like a password, never share it. A second calendar is optional (e.g. work alongside
+                    personal) - events from both are merged into one list, sorted by priority and time
+                    (see "Calendar priority" below), and colored by origin: Calendar A is blue, Calendar B
+                    is green (shown as a filled background on a light agenda background, plain colored
+                    text on a dark one - see Appearance below).
+<!-- #if FEATURE_WEBCAL -->
+                    A webcal:// subscription link (a calendar app's "subscribe" address) works too - it is
+                    fetched over https://.
+<!-- #endif -->
+<!-- #if FEATURE_SOURCE_AUTH -->
+                    A calendar that asks for a login takes it in the address, https://user:password@host/path
+                    - write @ as %40 and : as %3A inside the user name or password. Like the rest of the
+                    address it is never shown again.
+<!-- #endif -->
+<!-- #if FEATURE_CALDAV -->
+                    A CalDAV calendar of your own server works as caldavs://user:password@host/path
+                    (caldav:// for plain http): the frame then asks the server only for the coming days
+                    and lets it expand repeating events.
+<!-- #endif -->
+                  </div>
+<!-- #if FEATURE_SOURCE_AUTH -->
+                  <v-checkbox
+                    v-model="settingsStore.deviceSettings.sourceAuthAllowHttp"
+                    label="Allow a login over plain http:// (not encrypted - only for a server in your own network)"
+                    density="compact"
+                    hide-details
+                    class="mb-2"
+                  />
+<!-- #endif -->
+                  <v-row dense>
+                    <v-col cols="12" sm="6">
+                      <v-text-field
+                        v-model="settingsStore.deviceSettings.agendaCalUrl"
+                        label="Calendar A ICS URL"
+                        type="password"
+                        variant="outlined"
+                        density="compact"
+                        hint="Leave empty to keep the current URL"
+                        persistent-hint
+                        placeholder="••••••••"
+                      >
+                        <template #append-inner>
+                          <v-icon
+                            v-if="settingsStore.deviceSettings.agendaCalUrlConfigured"
+                            color="success"
+                            size="20"
+                            title="URL saved on device"
+                          >
+                            mdi-check-circle
+                          </v-icon>
+                        </template>
+                      </v-text-field>
+                    </v-col>
+                    <v-col cols="8" sm="3">
+                      <v-text-field
+                        v-model="settingsStore.deviceSettings.agendaCalName"
+                        label="Display name"
+                        variant="outlined"
+                        density="compact"
+                        placeholder="Calendar A"
+                        hint='Shown in the Calendar header instead of "Calendar A"'
+                        persistent-hint
+                      />
+                    </v-col>
+                    <v-col cols="4" sm="3">
+                      <v-select
+                        v-model="settingsStore.deviceSettings.agendaCalDays"
+                        :items="[1, 2, 3]"
+                        label="Days ahead"
+                        variant="outlined"
+                        density="compact"
+                      />
+                    </v-col>
+                  </v-row>
+                  <v-row dense>
+                    <v-col cols="12" sm="8">
+                      <v-text-field
+                        v-model="settingsStore.deviceSettings.agendaCalUrl2"
+                        label="Calendar B ICS URL (optional)"
+                        type="password"
+                        variant="outlined"
+                        density="compact"
+                        hint="Leave empty to keep the current URL, or to use only one calendar"
+                        persistent-hint
+                        placeholder="••••••••"
+                      >
+                        <template #append-inner>
+                          <v-icon
+                            v-if="settingsStore.deviceSettings.agendaCalUrl2Configured"
+                            color="success"
+                            size="20"
+                            title="URL saved on device"
+                          >
+                            mdi-check-circle
+                          </v-icon>
+                        </template>
+                      </v-text-field>
+                    </v-col>
+                    <v-col cols="12" sm="4">
+                      <v-text-field
+                        v-model="settingsStore.deviceSettings.agendaCalName2"
+                        label="Display name"
+                        variant="outlined"
+                        density="compact"
+                        placeholder="Calendar B"
+                        hint='Shown in the Calendar header instead of "Calendar B"'
+                        persistent-hint
+                      />
+                    </v-col>
+                  </v-row>
+                  <template v-if="settingsStore.deviceSettings.agendaCalEnabled">
+                    <v-switch
+                      v-model="settingsStore.deviceSettings.agendaCalWeatherEnabled"
+                      label="Show forecast on day dividers"
+                      color="primary"
+                      class="mt-2 mb-1"
+                      hide-details
+                    />
+                    <div class="text-caption text-medium-emphasis mb-2">
+                      Appends each day's forecast to its divider, e.g. "Fr 11. [18/25 cloudy]" - reuses the
+                      same location/provider settings as the photo Weather Overlay (Settings → Power →
+                      Weather + Headline Overlays), just for this independent display path. The list layout
+                      shows up to 3 days of forecast and the 7-day grid up to 7 (wttr.in only returns 3
+                      days, the rest then comes from Open-Meteo); a day beyond the forecast simply shows
+                      none.
+                    </div>
+                    <template v-if="settingsStore.deviceSettings.agendaCalWeatherEnabled">
+                      <v-switch
+                        v-model="settingsStore.deviceSettings.agendaCalWeatherRightAligned"
+                        label="Right-align forecast"
+                        color="primary"
+                        class="mb-1"
+                        hide-details
+                      />
+                      <div class="text-caption text-medium-emphasis mb-2">
+                        Off (default): forecast centered on the divider line. On: forecast flush against the
+                        right edge instead - just a placement preference, doesn't change how much of it fits
+                        (works the same in both the stacked and side-by-side layout).
+                      </div>
+                    </template>
+                    <v-select
+                      v-model="settingsStore.deviceSettings.agendaCalMultidayMode"
+                      :items="agendaMultidayModeOptions"
+                      item-title="title"
+                      item-value="value"
+                      label="Multi-day events"
+                      variant="outlined"
+                      class="mt-2 mb-1"
+                      hide-details
+                    />
+                    <div class="text-caption text-medium-emphasis mb-2">
+                      Repeat (default): a multi-day event appears under every day it spans, plain. Compact:
+                      shown only once, on the first visible day, with an "N/M:" prefix (which day of the
+                      event's full span, out of how many) - e.g. an 8-day trip whose 4th day is the first
+                      one visible shows "4/8: Trip" that one time only. Repeat + number: combines both -
+                      still repeated under every day, but each occurrence also gets its own "N/M:" prefix.
+                    </div>
+                    <v-select
+                      v-model="settingsStore.deviceSettings.agendaCalTimeDisplayMode"
+                      :items="agendaTimeDisplayModeOptions"
+                      item-title="title"
+                      item-value="value"
+                      label="Event time display"
+                      variant="outlined"
+                      class="mt-2 mb-1"
+                      hide-details
+                    />
+                    <div class="text-caption text-medium-emphasis mb-2">
+                      Duration is more compact for short events but longer once an event runs over an hour
+                      (e.g. "08:00 [1h30m]" vs. "08:00-09:30" for Range) - pick whichever reads better for
+                      your events. Neither affects all-day events.
+                    </div>
+                    <v-select
+                      v-model="settingsStore.deviceSettings.agendaCalLayoutMode"
+                      :items="agendaCalLayoutModeOptions"
+                      item-title="title"
+                      item-value="value"
+                      label="Layout"
+                      variant="outlined"
+                      class="mt-2 mb-1"
+                      hide-details
+                    />
+                    <div class="text-caption text-medium-emphasis mb-2">
+                      List (default): today's existing 1-3 day list, set by "Days ahead" above. 7-Day Grid:
+                      a full week at a glance, laid out as 4 rows x 2 columns with today getting extra space
+                      (Template A: full width; Template B: double height) - only takes effect when the ToDo
+                      column above is off (Calendar shown full-screen), falling back to List otherwise.
+                      Forecasts (if enabled above) cover all 7 days in grid mode, still 3 in List mode.
+                    </div>
+                    <v-text-field
+                      v-model="settingsStore.deviceSettings.agendaCalPriority"
+                      label="Calendar priority"
+                      placeholder="A,B,C,D,E"
+                      variant="outlined"
+                      density="compact"
+                      class="mt-2"
+                      :rules="agendaCalPriorityRules"
+                      hint="Most important first - A,B,C,D,E (default): A highest, E lowest"
+                      persistent-hint
+                    />
+                    <div class="text-caption text-medium-emphasis mb-2">
+                      Name each of the calendars A-E once, from the most to the least important (e.g.
+                      "C,A,B,D,E"). The entries of a calendar of higher priority are shown above those of a
+                      lower one, and when the column or cell has no room for everything, the entries of the
+                      lowest priority are the ones given up (only counted in "+N more") - so a flood of
+                      entries from a minor calendar cannot push an important appointment out.
+                    </div>
+                    <v-select
+                      v-model="settingsStore.deviceSettings.agendaCalOrder"
+                      :items="agendaCalOrderOptions"
+                      item-title="title"
+                      item-value="value"
+                      label="Order within a day"
+                      variant="outlined"
+                      class="mt-2 mb-1"
+                      hide-details
+                    />
+                    <div class="text-caption text-medium-emphasis mb-2">
+                      Priority first (default): all entries of calendar A, then B, ... - each by time.
+                      Time first: strictly by time, the priority only decides between entries that start
+                      together. Either way the entries of the lowest priority are given up first when the
+                      room runs out.
+                    </div>
+                    <v-switch
+                      v-model="settingsStore.deviceSettings.agendaCalShowWeek"
+                      label="Show the calendar week"
+                      color="primary"
+                      class="mb-1"
+                      hide-details
+                    />
+                    <div class="text-caption text-medium-emphasis mb-2">
+                      Adds the ISO calendar week to today's divider/cell and to every Monday's, e.g. "Mo 12.
+                      KW42" ("CW42" with the English overlay language).
+                    </div>
+                    <v-select
+                      v-model="settingsStore.deviceSettings.agendaShiftModel"
+                      :items="agendaShiftModelOptions"
+                      item-title="title"
+                      item-value="value"
+                      label="Rotation pattern"
+                      variant="outlined"
+                      class="mt-2 mb-1"
+                      hide-details
+                    />
+                    <div class="text-caption text-medium-emphasis mb-2">
+                      Marks every other day by an alternating custody-style schedule (e.g. "2-2-3": 2
+                      days/2 days/3 days, then which side starts flips the following week) - off by
+                      default. Works in the list and in the 7-day grid. Needs a start date below to anchor
+                      which day the pattern begins on. Which color the marked days get, and whether it
+                      colors the day header or the appointment area, comes from the active Color Profile
+                      below (its "mark" color and "markColorsHeader" setting) rather than from a setting
+                      here.
+                    </div>
+                    <v-row v-if="settingsStore.deviceSettings.agendaShiftModel !== 'none'" dense>
+                      <v-col cols="6" sm="4">
+                        <v-text-field
+                          v-model="settingsStore.deviceSettings.agendaShiftStart"
+                          label="Start date"
+                          type="date"
+                          variant="outlined"
+                          density="compact"
+                          hide-details
+                        />
+                      </v-col>
+                    </v-row>
                   </template>
-                </v-text-field>
-              </v-col>
-              <v-col cols="8" sm="3">
-                <v-text-field
-                  v-model="settingsStore.deviceSettings.agendaCalName"
-                  label="Display name"
-                  variant="outlined"
-                  density="compact"
-                  placeholder="Calendar A"
-                  hint='Shown in the Calendar header instead of "Calendar A"'
-                  persistent-hint
-                />
-              </v-col>
-              <v-col cols="4" sm="3">
-                <v-select
-                  v-model="settingsStore.deviceSettings.agendaCalDays"
-                  :items="[1, 2, 3]"
-                  label="Days ahead"
-                  variant="outlined"
-                  density="compact"
-                />
-              </v-col>
-            </v-row>
-            <v-row dense>
-              <v-col cols="12" sm="8">
-                <v-text-field
-                  v-model="settingsStore.deviceSettings.agendaCalUrl2"
-                  label="Calendar B ICS URL (optional)"
-                  type="password"
-                  variant="outlined"
-                  density="compact"
-                  hint="Leave empty to keep the current URL, or to use only one calendar"
-                  persistent-hint
-                  placeholder="••••••••"
-                >
-                  <template #append-inner>
-                    <v-icon
-                      v-if="settingsStore.deviceSettings.agendaCalUrl2Configured"
-                      color="success"
-                      size="20"
-                      title="URL saved on device"
-                    >
-                      mdi-check-circle
-                    </v-icon>
+                </v-expansion-panel-text>
+              </v-expansion-panel>
+              <v-expansion-panel value="extra-calendars">
+                <v-expansion-panel-title>
+                  <span class="text-subtitle-2">Extra ICS Calendars</span>
+                  <span class="text-caption text-medium-emphasis ml-3">{{ agendaExtraCalSummary }}</span>
+                </v-expansion-panel-title>
+                <v-expansion-panel-text>
+                  <div class="text-caption text-medium-emphasis mb-2">
+                    Up to three additional calendars (e.g. holidays, school holidays, or any other .ics
+                    feed) shown in the same Calendar column above, each in its own color (set per-source
+                    in the active Color Profile below) with a colored letter (C/D/E) in the header when
+                    active. Unlike Calendar A/B, these are <strong>never refreshed automatically</strong>
+                    - only when you save a new/changed URL, click "Refresh now", or upload a replacement
+                    file directly. If a source runs out of upcoming events, a permanent reminder appears
+                    in the calendar identifying which one needs updating. Each source shows up to 48
+                    events within its 30-day window - plenty for holidays/school-holidays, but a very
+                    densely-booked file could hit that cap.
+                  </div>
+
+                  <template v-if="settingsStore.deviceSettings.agendaCalEnabled">
+                    <v-card variant="tonal" class="mb-3">
+                      <v-card-text>
+                        <v-switch
+                          v-model="calendarCEnabledModel"
+                          label="Calendar C enabled"
+                          color="primary"
+                          hide-details
+                          class="mb-2"
+                        />
+                        <v-row dense>
+                          <v-col cols="12" sm="7">
+                            <v-text-field
+                              v-model="settingsStore.deviceSettings.agendaCalCUrl"
+                              label="Calendar C ICS URL"
+                              type="password"
+                              variant="outlined"
+                              density="compact"
+                              hint="Leave empty to keep the current URL - fetched once on save, never again automatically"
+                              persistent-hint
+                              placeholder="••••••••"
+                            >
+                              <template #append-inner>
+                                <v-icon
+                                  v-if="settingsStore.deviceSettings.agendaCalCConfigured"
+                                  color="success"
+                                  size="20"
+                                  title="Source saved on device"
+                                >
+                                  mdi-check-circle
+                                </v-icon>
+                              </template>
+                            </v-text-field>
+                          </v-col>
+                          <v-col cols="12" sm="5">
+                            <v-text-field
+                              v-model="settingsStore.deviceSettings.agendaCalCName"
+                              label="Display name"
+                              variant="outlined"
+                              density="compact"
+                              placeholder="Calendar C"
+                            />
+                          </v-col>
+                        </v-row>
+                        <div class="d-flex flex-wrap ga-2 mt-1">
+                          <v-btn
+                            size="small"
+                            variant="tonal"
+                            :loading="refreshingExtraIcs.c"
+                            @click="refreshExtraIcs('c')"
+                          >
+                            Refresh now
+                          </v-btn>
+                          <v-btn
+                            size="small"
+                            variant="tonal"
+                            :loading="uploadingExtraIcs.c"
+                            @click="extraIcsFileC?.click()"
+                          >
+                            Upload .ics file
+                          </v-btn>
+                          <input
+                            ref="extraIcsFileC"
+                            type="file"
+                            accept=".ics"
+                            hidden
+                            @change="onExtraIcsFileSelected($event, 'c')"
+                          />
+                        </div>
+                      </v-card-text>
+                    </v-card>
+
+                    <v-card variant="tonal" class="mb-3">
+                      <v-card-text>
+                        <v-switch
+                          v-model="calendarDEnabledModel"
+                          label="Calendar D enabled"
+                          color="primary"
+                          hide-details
+                          class="mb-2"
+                        />
+                        <v-row dense>
+                          <v-col cols="12" sm="7">
+                            <v-text-field
+                              v-model="settingsStore.deviceSettings.agendaCalDUrl"
+                              label="Calendar D ICS URL"
+                              type="password"
+                              variant="outlined"
+                              density="compact"
+                              hint="Leave empty to keep the current URL - fetched once on save, never again automatically"
+                              persistent-hint
+                              placeholder="••••••••"
+                            >
+                              <template #append-inner>
+                                <v-icon
+                                  v-if="settingsStore.deviceSettings.agendaCalDConfigured"
+                                  color="success"
+                                  size="20"
+                                  title="Source saved on device"
+                                >
+                                  mdi-check-circle
+                                </v-icon>
+                              </template>
+                            </v-text-field>
+                          </v-col>
+                          <v-col cols="12" sm="5">
+                            <v-text-field
+                              v-model="settingsStore.deviceSettings.agendaCalDName"
+                              label="Display name"
+                              variant="outlined"
+                              density="compact"
+                              placeholder="Calendar D"
+                            />
+                          </v-col>
+                        </v-row>
+                        <div class="d-flex flex-wrap ga-2 mt-1">
+                          <v-btn
+                            size="small"
+                            variant="tonal"
+                            :loading="refreshingExtraIcs.d"
+                            @click="refreshExtraIcs('d')"
+                          >
+                            Refresh now
+                          </v-btn>
+                          <v-btn
+                            size="small"
+                            variant="tonal"
+                            :loading="uploadingExtraIcs.d"
+                            @click="extraIcsFileD?.click()"
+                          >
+                            Upload .ics file
+                          </v-btn>
+                          <input
+                            ref="extraIcsFileD"
+                            type="file"
+                            accept=".ics"
+                            hidden
+                            @change="onExtraIcsFileSelected($event, 'd')"
+                          />
+                        </div>
+                      </v-card-text>
+                    </v-card>
+
+                    <v-card variant="tonal" class="mb-3">
+                      <v-card-text>
+                        <v-switch
+                          v-model="calendarEEnabledModel"
+                          label="Calendar E enabled"
+                          color="primary"
+                          hide-details
+                          class="mb-2"
+                        />
+                        <v-row dense>
+                          <v-col cols="12" sm="7">
+                            <v-text-field
+                              v-model="settingsStore.deviceSettings.agendaCalEUrl"
+                              label="Calendar E ICS URL"
+                              type="password"
+                              variant="outlined"
+                              density="compact"
+                              hint="Leave empty to keep the current URL - fetched once on save, never again automatically"
+                              persistent-hint
+                              placeholder="••••••••"
+                            >
+                              <template #append-inner>
+                                <v-icon
+                                  v-if="settingsStore.deviceSettings.agendaCalEConfigured"
+                                  color="success"
+                                  size="20"
+                                  title="Source saved on device"
+                                >
+                                  mdi-check-circle
+                                </v-icon>
+                              </template>
+                            </v-text-field>
+                          </v-col>
+                          <v-col cols="12" sm="5">
+                            <v-text-field
+                              v-model="settingsStore.deviceSettings.agendaCalEName"
+                              label="Display name"
+                              variant="outlined"
+                              density="compact"
+                              placeholder="Calendar E"
+                            />
+                          </v-col>
+                        </v-row>
+                        <div class="d-flex flex-wrap ga-2 mt-1">
+                          <v-btn
+                            size="small"
+                            variant="tonal"
+                            :loading="refreshingExtraIcs.e"
+                            @click="refreshExtraIcs('e')"
+                          >
+                            Refresh now
+                          </v-btn>
+                          <v-btn
+                            size="small"
+                            variant="tonal"
+                            :loading="uploadingExtraIcs.e"
+                            @click="extraIcsFileE?.click()"
+                          >
+                            Upload .ics file
+                          </v-btn>
+                          <input
+                            ref="extraIcsFileE"
+                            type="file"
+                            accept=".ics"
+                            hidden
+                            @change="onExtraIcsFileSelected($event, 'e')"
+                          />
+                        </div>
+                      </v-card-text>
+                    </v-card>
                   </template>
-                </v-text-field>
-              </v-col>
-              <v-col cols="12" sm="4">
-                <v-text-field
-                  v-model="settingsStore.deviceSettings.agendaCalName2"
-                  label="Display name"
-                  variant="outlined"
-                  density="compact"
-                  placeholder="Calendar B"
-                  hint='Shown in the Calendar header instead of "Calendar B"'
-                  persistent-hint
-                />
-              </v-col>
-            </v-row>
-            <v-switch
-              v-model="settingsStore.deviceSettings.agendaCalWeatherEnabled"
-              label="Show forecast on day dividers"
-              color="primary"
-              class="mt-2 mb-1"
-              hide-details
-              :disabled="!settingsStore.deviceSettings.agendaCalEnabled"
-            />
-            <div class="text-caption text-medium-emphasis mb-2">
-              Appends each day's forecast to its divider, e.g. "Fr 11. [18/25 cloudy]" - reuses the
-              same location/provider settings as the photo Weather Overlay (Settings → Power →
-              Weather + Headline Overlays), just for this independent display path. The list layout
-              shows up to 3 days of forecast and the 7-day grid up to 7 (wttr.in only returns 3
-              days, the rest then comes from Open-Meteo); a day beyond the forecast simply shows
-              none.
-            </div>
-            <v-switch
-              v-model="settingsStore.deviceSettings.agendaCalWeatherRightAligned"
-              label="Right-align forecast"
-              color="primary"
-              class="mb-1"
-              hide-details
-              :disabled="
-                !settingsStore.deviceSettings.agendaCalEnabled ||
-                !settingsStore.deviceSettings.agendaCalWeatherEnabled
-              "
-            />
-            <div class="text-caption text-medium-emphasis mb-2">
-              Off (default): forecast centered on the divider line. On: forecast flush against the
-              right edge instead - just a placement preference, doesn't change how much of it fits
-              (works the same in both the stacked and side-by-side layout).
-            </div>
-            <v-select
-              v-model="settingsStore.deviceSettings.agendaCalMultidayMode"
-              :items="agendaMultidayModeOptions"
-              item-title="title"
-              item-value="value"
-              label="Multi-day events"
-              variant="outlined"
-              class="mt-2 mb-1"
-              hide-details
-              :disabled="!settingsStore.deviceSettings.agendaCalEnabled"
-            />
-            <div class="text-caption text-medium-emphasis mb-2">
-              Repeat (default): a multi-day event appears under every day it spans, plain. Compact:
-              shown only once, on the first visible day, with an "N/M:" prefix (which day of the
-              event's full span, out of how many) - e.g. an 8-day trip whose 4th day is the first
-              one visible shows "4/8: Trip" that one time only. Repeat + number: combines both -
-              still repeated under every day, but each occurrence also gets its own "N/M:" prefix.
-            </div>
-            <v-select
-              v-model="settingsStore.deviceSettings.agendaCalTimeDisplayMode"
-              :items="agendaTimeDisplayModeOptions"
-              item-title="title"
-              item-value="value"
-              label="Event time display"
-              variant="outlined"
-              class="mt-2 mb-1"
-              hide-details
-              :disabled="!settingsStore.deviceSettings.agendaCalEnabled"
-            />
-            <div class="text-caption text-medium-emphasis mb-2">
-              Duration is more compact for short events but longer once an event runs over an hour
-              (e.g. "08:00 [1h30m]" vs. "08:00-09:30" for Range) - pick whichever reads better for
-              your events. Neither affects all-day events.
-            </div>
-            <v-select
-              v-model="settingsStore.deviceSettings.agendaCalLayoutMode"
-              :items="agendaCalLayoutModeOptions"
-              item-title="title"
-              item-value="value"
-              label="Layout"
-              variant="outlined"
-              class="mt-2 mb-1"
-              hide-details
-              :disabled="!settingsStore.deviceSettings.agendaCalEnabled"
-            />
-            <div class="text-caption text-medium-emphasis mb-2">
-              List (default): today's existing 1-3 day list, set by "Days ahead" above. 7-Day Grid:
-              a full week at a glance, laid out as 4 rows x 2 columns with today getting extra space
-              (Template A: full width; Template B: double height) - only takes effect when the ToDo
-              column above is off (Calendar shown full-screen), falling back to List otherwise.
-              Forecasts (if enabled above) cover all 7 days in grid mode, still 3 in List mode.
-            </div>
-            <v-text-field
-              v-model="settingsStore.deviceSettings.agendaCalPriority"
-              label="Calendar priority"
-              placeholder="A,B,C,D,E"
-              variant="outlined"
-              density="compact"
-              class="mt-2"
-              :rules="agendaCalPriorityRules"
-              hint="Most important first - A,B,C,D,E (default): A highest, E lowest"
-              persistent-hint
-              :disabled="!settingsStore.deviceSettings.agendaCalEnabled"
-            />
-            <div class="text-caption text-medium-emphasis mb-2">
-              Name each of the calendars A-E once, from the most to the least important (e.g.
-              "C,A,B,D,E"). The entries of a calendar of higher priority are shown above those of a
-              lower one, and when the column or cell has no room for everything, the entries of the
-              lowest priority are the ones given up (only counted in "+N more") - so a flood of
-              entries from a minor calendar cannot push an important appointment out.
-            </div>
-            <v-select
-              v-model="settingsStore.deviceSettings.agendaCalOrder"
-              :items="agendaCalOrderOptions"
-              item-title="title"
-              item-value="value"
-              label="Order within a day"
-              variant="outlined"
-              class="mt-2 mb-1"
-              hide-details
-              :disabled="!settingsStore.deviceSettings.agendaCalEnabled"
-            />
-            <div class="text-caption text-medium-emphasis mb-2">
-              Priority first (default): all entries of calendar A, then B, ... - each by time.
-              Time first: strictly by time, the priority only decides between entries that start
-              together. Either way the entries of the lowest priority are given up first when the
-              room runs out.
-            </div>
-            <v-switch
-              v-model="settingsStore.deviceSettings.agendaCalShowWeek"
-              label="Show the calendar week"
-              color="primary"
-              class="mb-1"
-              hide-details
-              :disabled="!settingsStore.deviceSettings.agendaCalEnabled"
-            />
-            <div class="text-caption text-medium-emphasis mb-2">
-              Adds the ISO calendar week to today's divider/cell and to every Monday's, e.g. "Mo 12.
-              KW42" ("CW42" with the English overlay language).
-            </div>
-            <v-select
-              v-model="settingsStore.deviceSettings.agendaShiftModel"
-              :items="agendaShiftModelOptions"
-              item-title="title"
-              item-value="value"
-              label="Rotation pattern"
-              variant="outlined"
-              class="mt-2 mb-1"
-              hide-details
-              :disabled="!settingsStore.deviceSettings.agendaCalEnabled"
-            />
-            <div class="text-caption text-medium-emphasis mb-2">
-              Marks every other day by an alternating custody-style schedule (e.g. "2-2-3": 2
-              days/2 days/3 days, then which side starts flips the following week) - off by
-              default. Works in the list and in the 7-day grid. Needs a start date below to anchor
-              which day the pattern begins on. Which color the marked days get, and whether it
-              colors the day header or the appointment area, comes from the active Color Profile
-              below (its "mark" color and "markColorsHeader" setting) rather than from a setting
-              here.
-            </div>
-            <v-row v-if="settingsStore.deviceSettings.agendaShiftModel !== 'none'" dense>
-              <v-col cols="6" sm="4">
-                <v-text-field
-                  v-model="settingsStore.deviceSettings.agendaShiftStart"
-                  label="Start date"
-                  type="date"
-                  variant="outlined"
-                  density="compact"
-                  hide-details
-                />
-              </v-col>
-            </v-row>
-
-            <v-divider class="mb-4 mt-2" />
-
-            <div class="text-subtitle-2 mb-2">Extra ICS Calendars</div>
-            <div class="text-caption text-medium-emphasis mb-2">
-              Up to three additional calendars (e.g. holidays, school holidays, or any other .ics
-              feed) shown in the same Calendar column above, each in its own color (set per-source
-              in the active Color Profile below) with a colored letter (C/D/E) in the header when
-              active. Unlike Calendar A/B, these are <strong>never refreshed automatically</strong>
-              - only when you save a new/changed URL, click "Refresh now", or upload a replacement
-              file directly. If a source runs out of upcoming events, a permanent reminder appears
-              in the calendar identifying which one needs updating. Each source shows up to 48
-              events within its 30-day window - plenty for holidays/school-holidays, but a very
-              densely-booked file could hit that cap.
-            </div>
-
-            <v-card variant="tonal" class="mb-3">
-              <v-card-text>
-                <v-switch
-                  v-model="calendarCEnabledModel"
-                  label="Calendar C enabled"
-                  color="primary"
-                  hide-details
-                  class="mb-2"
-                  :disabled="!settingsStore.deviceSettings.agendaCalEnabled"
-                />
-                <v-row dense>
-                  <v-col cols="12" sm="7">
-                    <v-text-field
-                      v-model="settingsStore.deviceSettings.agendaCalCUrl"
-                      label="Calendar C ICS URL"
-                      type="password"
-                      variant="outlined"
-                      density="compact"
-                      hint="Leave empty to keep the current URL - fetched once on save, never again automatically"
-                      persistent-hint
-                      placeholder="••••••••"
-                      :disabled="!settingsStore.deviceSettings.agendaCalEnabled"
-                    >
-                      <template #append-inner>
-                        <v-icon
-                          v-if="settingsStore.deviceSettings.agendaCalCConfigured"
-                          color="success"
-                          size="20"
-                          title="Source saved on device"
-                        >
-                          mdi-check-circle
-                        </v-icon>
-                      </template>
-                    </v-text-field>
-                  </v-col>
-                  <v-col cols="12" sm="5">
-                    <v-text-field
-                      v-model="settingsStore.deviceSettings.agendaCalCName"
-                      label="Display name"
-                      variant="outlined"
-                      density="compact"
-                      placeholder="Calendar C"
-                      :disabled="!settingsStore.deviceSettings.agendaCalEnabled"
-                    />
-                  </v-col>
-                </v-row>
-                <div class="d-flex flex-wrap ga-2 mt-1">
-                  <v-btn
-                    size="small"
-                    variant="tonal"
-                    :loading="refreshingExtraIcs.c"
-                    :disabled="!settingsStore.deviceSettings.agendaCalEnabled"
-                    @click="refreshExtraIcs('c')"
-                  >
-                    Refresh now
-                  </v-btn>
-                  <v-btn
-                    size="small"
-                    variant="tonal"
-                    :loading="uploadingExtraIcs.c"
-                    :disabled="!settingsStore.deviceSettings.agendaCalEnabled"
-                    @click="extraIcsFileC?.click()"
-                  >
-                    Upload .ics file
-                  </v-btn>
-                  <input
-                    ref="extraIcsFileC"
-                    type="file"
-                    accept=".ics"
-                    hidden
-                    @change="onExtraIcsFileSelected($event, 'c')"
+                  <div v-else class="text-caption text-medium-emphasis">
+                    Turn the Calendar on first - the extra calendars are shown in its column.
+                  </div>
+                </v-expansion-panel-text>
+              </v-expansion-panel>
+              <v-expansion-panel value="schedule">
+                <v-expansion-panel-title>
+                  <span class="text-subtitle-2">Schedule</span>
+                  <span class="text-caption text-medium-emphasis ml-3">{{ agendaScheduleSummary }}</span>
+                </v-expansion-panel-title>
+                <v-expansion-panel-text>
+<!-- #if FEATURE_INFO_SCREENS -->
+<!-- #if FEATURE_SCHEDULE_PAGES -->
+                  <div class="text-caption text-medium-emphasis mb-2">
+                    Independent from the Auto-Rotate schedule above - applies while ToDo, Calendar, a
+                    ticked information screen, or a schedule below with pages of its own is active.
+                  </div>
+                  <RotationSchedule
+                    v-model="settingsStore.deviceSettings.agendaCron"
+                    v-model:pages="settingsStore.deviceSettings.agendaCronPages"
+                    v-model:holds="settingsStore.deviceSettings.agendaCronHold"
+                    :page-items="schedulePageItems"
+                    :disabled="agendaScheduleDisabled"
                   />
-                </div>
-              </v-card-text>
-            </v-card>
-
-            <v-card variant="tonal" class="mb-3">
-              <v-card-text>
-                <v-switch
-                  v-model="calendarDEnabledModel"
-                  label="Calendar D enabled"
-                  color="primary"
-                  hide-details
-                  class="mb-2"
-                  :disabled="!settingsStore.deviceSettings.agendaCalEnabled"
-                />
-                <v-row dense>
-                  <v-col cols="12" sm="7">
-                    <v-text-field
-                      v-model="settingsStore.deviceSettings.agendaCalDUrl"
-                      label="Calendar D ICS URL"
-                      type="password"
-                      variant="outlined"
-                      density="compact"
-                      hint="Leave empty to keep the current URL - fetched once on save, never again automatically"
-                      persistent-hint
-                      placeholder="••••••••"
-                      :disabled="!settingsStore.deviceSettings.agendaCalEnabled"
-                    >
-                      <template #append-inner>
-                        <v-icon
-                          v-if="settingsStore.deviceSettings.agendaCalDConfigured"
-                          color="success"
-                          size="20"
-                          title="Source saved on device"
-                        >
-                          mdi-check-circle
-                        </v-icon>
-                      </template>
-                    </v-text-field>
-                  </v-col>
-                  <v-col cols="12" sm="5">
-                    <v-text-field
-                      v-model="settingsStore.deviceSettings.agendaCalDName"
-                      label="Display name"
-                      variant="outlined"
-                      density="compact"
-                      placeholder="Calendar D"
-                      :disabled="!settingsStore.deviceSettings.agendaCalEnabled"
-                    />
-                  </v-col>
-                </v-row>
-                <div class="d-flex flex-wrap ga-2 mt-1">
-                  <v-btn
-                    size="small"
-                    variant="tonal"
-                    :loading="refreshingExtraIcs.d"
-                    :disabled="!settingsStore.deviceSettings.agendaCalEnabled"
-                    @click="refreshExtraIcs('d')"
-                  >
-                    Refresh now
-                  </v-btn>
-                  <v-btn
-                    size="small"
-                    variant="tonal"
-                    :loading="uploadingExtraIcs.d"
-                    :disabled="!settingsStore.deviceSettings.agendaCalEnabled"
-                    @click="extraIcsFileD?.click()"
-                  >
-                    Upload .ics file
-                  </v-btn>
-                  <input
-                    ref="extraIcsFileD"
-                    type="file"
-                    accept=".ics"
-                    hidden
-                    @change="onExtraIcsFileSelected($event, 'd')"
-                  />
-                </div>
-              </v-card-text>
-            </v-card>
-
-            <v-card variant="tonal" class="mb-3">
-              <v-card-text>
-                <v-switch
-                  v-model="calendarEEnabledModel"
-                  label="Calendar E enabled"
-                  color="primary"
-                  hide-details
-                  class="mb-2"
-                  :disabled="!settingsStore.deviceSettings.agendaCalEnabled"
-                />
-                <v-row dense>
-                  <v-col cols="12" sm="7">
-                    <v-text-field
-                      v-model="settingsStore.deviceSettings.agendaCalEUrl"
-                      label="Calendar E ICS URL"
-                      type="password"
-                      variant="outlined"
-                      density="compact"
-                      hint="Leave empty to keep the current URL - fetched once on save, never again automatically"
-                      persistent-hint
-                      placeholder="••••••••"
-                      :disabled="!settingsStore.deviceSettings.agendaCalEnabled"
-                    >
-                      <template #append-inner>
-                        <v-icon
-                          v-if="settingsStore.deviceSettings.agendaCalEConfigured"
-                          color="success"
-                          size="20"
-                          title="Source saved on device"
-                        >
-                          mdi-check-circle
-                        </v-icon>
-                      </template>
-                    </v-text-field>
-                  </v-col>
-                  <v-col cols="12" sm="5">
-                    <v-text-field
-                      v-model="settingsStore.deviceSettings.agendaCalEName"
-                      label="Display name"
-                      variant="outlined"
-                      density="compact"
-                      placeholder="Calendar E"
-                      :disabled="!settingsStore.deviceSettings.agendaCalEnabled"
-                    />
-                  </v-col>
-                </v-row>
-                <div class="d-flex flex-wrap ga-2 mt-1">
-                  <v-btn
-                    size="small"
-                    variant="tonal"
-                    :loading="refreshingExtraIcs.e"
-                    :disabled="!settingsStore.deviceSettings.agendaCalEnabled"
-                    @click="refreshExtraIcs('e')"
-                  >
-                    Refresh now
-                  </v-btn>
-                  <v-btn
-                    size="small"
-                    variant="tonal"
-                    :loading="uploadingExtraIcs.e"
-                    :disabled="!settingsStore.deviceSettings.agendaCalEnabled"
-                    @click="extraIcsFileE?.click()"
-                  >
-                    Upload .ics file
-                  </v-btn>
-                  <input
-                    ref="extraIcsFileE"
-                    type="file"
-                    accept=".ics"
-                    hidden
-                    @change="onExtraIcsFileSelected($event, 'e')"
-                  />
-                </div>
-              </v-card-text>
-            </v-card>
-
-            <v-divider class="mb-4 mt-2" />
-
-            <div class="text-subtitle-2 mb-2">Schedule</div>
-            <div class="text-caption text-medium-emphasis mb-2">
-              Independent from the Auto-Rotate schedule above - only applies while ToDo and/or
-              Calendar is enabled.
-            </div>
-            <RotationSchedule
-              v-model="settingsStore.deviceSettings.agendaCron"
-              :disabled="
-                !(
-                  settingsStore.deviceSettings.agendaTodoEnabled ||
-                  settingsStore.deviceSettings.agendaCalEnabled
-                )
-              "
-            />
-
-            <v-divider class="mb-4 mt-2" />
-
-            <div class="text-subtitle-2 mb-2">Appearance</div>
-            <div class="text-caption text-medium-emphasis mb-2">
-              Layout only matters when both ToDo and Calendar are shown together - portrait boards
-              always stack them regardless of this setting (a side-by-side split would make each
-              column too narrow there).
-            </div>
-            <v-radio-group
-              v-model="settingsStore.deviceSettings.agendaStackLayout"
-              inline
-              density="compact"
-              hide-details
-              class="mb-4"
-            >
-              <v-radio label="Stacked (ToDo above Calendar)" :value="true" />
-              <v-radio label="Side by side" :value="false" />
-            </v-radio-group>
-            <div class="text-caption text-medium-emphasis mb-2">
-              The ToDo column always uses a plain black-on-white page. The Calendar column's entire
-              appearance - background, header colors, per-source colors, and marking - is controlled
-              by the Color Profile you import below instead.
-            </div>
-
-            <template v-if="!agendaIsGrayscaleBoard">
-              <v-divider class="mb-4 mt-4" />
-              <div class="text-subtitle-2 mb-2">ToDo Colors</div>
-              <div class="text-caption text-medium-emphasis mb-3">
-                Color panels only - grayscale boards have no spare hue to assign here. Any color
-                that happens to match the fixed white page is automatically swapped for a safe
-                fallback, so nothing can silently disappear.
-              </div>
-              <v-row dense>
-                <v-col
-                  v-for="field in agendaTodoColorFields"
-                  :key="field.key"
-                  cols="6"
-                  sm="4"
-                  md="3"
-                >
-                  <v-select
-                    v-model="settingsStore.deviceSettings[field.key]"
-                    :items="agendaHueOptions"
-                    :label="field.label"
+                  <div class="text-caption text-medium-emphasis mt-2 mb-2">
+                    Give a schedule pages and the schedules work together: when two overlap, the one with
+                    the smaller number wins, and no display replaces another within the minimum time
+                    below (a schedule's own hold time replaces it for that schedule). The photo rotation
+                    gives way to them too. Without pages on any schedule nothing changes. A page greyed
+                    out here is not available right now - ToDo & Calendar while neither is switched on
+                    above, any other page while it is not ticked under Information screens below (tick it
+                    there to bring it back); a schedule whose available pages are all greyed out this way
+                    draws the shared rotation instead.
+                  </div>
+                  <v-text-field
+                    v-model.number="settingsStore.deviceSettings.agendaGapMin"
+                    type="number"
+                    min="0"
+                    max="240"
+                    label="Minimum time between two displays (minutes)"
                     variant="outlined"
                     density="compact"
                     hide-details
+                    style="max-width: 420px"
                   />
-                </v-col>
-              </v-row>
-            </template>
-
-            <v-divider class="mb-4 mt-4" />
-            <div class="text-subtitle-2 mb-2">Calendar Color Profiles</div>
-            <div class="text-caption text-medium-emphasis mb-3">
-              Import a color profile JSON exported from the standalone "profile-editor.html" visual
-              editor tool to control exactly how the Calendar view is colored - text/background,
-              per-day headers, the shared top header, each Calendar source's color, and (if a
-              rotation pattern is set above) which single color marks a day. Up to 3 profiles can be
-              stored on the device; only one is active at a time. On a grayscale/monochrome display,
-              a color-mode profile is shown as a plain black/white inversion instead of its authored
-              hues - its "mode" only matters directly on a color panel.
-            </div>
-            <v-btn
-              variant="outlined"
-              size="small"
-              class="mb-4"
-              href="/profile-editor.html"
-              target="_blank"
-              rel="noopener"
-            >
-              Open Color Profile Editor
-            </v-btn>
-            <div class="text-caption text-medium-emphasis mb-3">
-              Opens the editor tool served directly by this device (new tab). It draws the same
-              picture as this frame, and its "Send to frame" button saves straight into a slot
-              below, no manual export/import round-trip needed.
-            </div>
-            <v-select
-              v-model="settingsStore.deviceSettings.agendaColorProfileActive"
-              :items="agendaColorProfileActiveOptions"
-              item-title="title"
-              item-value="value"
-              label="Active profile"
-              variant="outlined"
-              density="compact"
-              hide-details
-              class="mb-4"
-              style="max-width: 420px"
-            />
-            <v-row dense>
-              <v-col v-for="slot in [1, 2, 3]" :key="slot" cols="12" sm="4">
-                <v-card variant="tonal">
-                  <v-card-text>
-                    <div class="text-caption text-medium-emphasis">Slot {{ slot }}</div>
-                    <div class="text-body-2 mb-2">
-                      {{ agendaColorProfileSlots.find((s) => s.slot === slot)?.name || "(empty)" }}
+                  <v-alert
+                    v-if="orphanedActivePages.length"
+                    type="warning"
+                    density="compact"
+                    variant="tonal"
+                    class="mt-2"
+                  >
+                    {{ orphanedActivePages.join(", ") }} {{ orphanedActivePages.length > 1 ? "are" : "is" }} on,
+                    but every schedule above has its own pages and none of them include it - it will never be
+                    drawn. Add it to a schedule, or clear one schedule's pages to let the shared rotation show it.
+                  </v-alert>
+<!-- #else -->
+                  <div class="text-caption text-medium-emphasis mb-2">
+                    Independent from the Auto-Rotate schedule above - applies while ToDo, Calendar, or a
+                    ticked information screen is active.
+                  </div>
+                  <RotationSchedule
+                    v-model="settingsStore.deviceSettings.agendaCron"
+                    :disabled="agendaScheduleDisabled"
+                  />
+<!-- #endif -->
+<!-- #else -->
+                  <div class="text-caption text-medium-emphasis mb-2">
+                    Independent from the Auto-Rotate schedule above - only applies while ToDo and/or
+                    Calendar is enabled.
+                  </div>
+                  <RotationSchedule
+                    v-model="settingsStore.deviceSettings.agendaCron"
+                    :disabled="
+                      !(
+                        settingsStore.deviceSettings.agendaTodoEnabled ||
+                        settingsStore.deviceSettings.agendaCalEnabled
+                      )
+                    "
+                  />
+<!-- #endif -->
+                </v-expansion-panel-text>
+              </v-expansion-panel>
+<!-- #if FEATURE_INFO_SCREENS -->
+              <v-expansion-panel value="info-screens">
+                <v-expansion-panel-title>
+                  <span class="text-subtitle-2">Information screens</span>
+                  <span class="text-caption text-medium-emphasis ml-3">{{ infoScreenSummary }}</span>
+                </v-expansion-panel-title>
+                <v-expansion-panel-text>
+                  <div class="text-caption text-medium-emphasis mb-2">
+                    Full-screen pages that take turns with the ToDo &amp; Calendar page: every time the
+                    schedule above fires, the next page of those ticked here is drawn. ToDo &amp; Calendar
+                    itself is not ticked here - it already has its own on/off switch in its own section
+                    above (a second one here could only disagree with it) - tick none of these to keep
+                    things as they were.
+                  </div>
+<!-- #if FEATURE_CHORE_WHEEL -->
+                  <v-checkbox
+                    v-model="settingsStore.deviceSettings.infoScreens"
+                    value="chore-wheel"
+                    label="Chore wheel"
+                    density="compact"
+                    hide-details
+                  />
+                  <div v-if="infoScreenOn('chore-wheel')" class="ml-4 pl-4 mb-3 border-s">
+                    <div class="text-caption text-medium-emphasis mt-2 mb-2">
+                      Chore wheel: the chores go round the members by calendar week. Separate names with
+                      commas; up to 5 members and 6 chores, each name up to 23 characters.
                     </div>
-                    <v-btn
-                      size="small"
+                    <v-text-field
+                      v-model="settingsStore.deviceSettings.choreMembers"
+                      label="Members"
+                      placeholder="Anna, Ben, Clara"
+                      maxlength="159"
                       variant="outlined"
-                      :loading="agendaColorProfileUploading[slot]"
-                      @click="colorProfileFileInputs[slot]?.click()"
-                    >
-                      Import
-                    </v-btn>
-                    <v-btn
-                      v-if="agendaColorProfileSlots.find((s) => s.slot === slot)?.name"
-                      size="small"
-                      variant="outlined"
-                      class="ml-2"
-                      @click="exportAgendaColorProfile(slot)"
-                    >
-                      Export
-                    </v-btn>
-                    <v-btn
-                      v-if="agendaColorProfileSlots.find((s) => s.slot === slot)?.name"
-                      size="small"
-                      variant="outlined"
-                      color="error"
-                      class="ml-2"
-                      @click="deleteAgendaColorProfile(slot)"
-                    >
-                      Remove
-                    </v-btn>
-                    <input
-                      :ref="(el) => (colorProfileFileInputs[slot] = el)"
-                      type="file"
-                      accept=".json,application/json"
-                      style="display: none"
-                      @change="onAgendaColorProfileFileSelected($event, slot)"
+                      density="compact"
+                      class="mb-2"
                     />
-                  </v-card-text>
-                </v-card>
-              </v-col>
-            </v-row>
+                    <v-text-field
+                      v-model="settingsStore.deviceSettings.choreTasks"
+                      label="Chores"
+                      placeholder="Bins, Dishes, Vacuum"
+                      maxlength="159"
+                      variant="outlined"
+                      density="compact"
+                      class="mb-2"
+                    />
+                  </div>
+<!-- #endif -->
+<!-- #if FEATURE_WEATHER_SCREEN -->
+                  <v-checkbox
+                    v-model="settingsStore.deviceSettings.infoScreens"
+                    value="weather"
+                    label="Weather"
+                    density="compact"
+                    hide-details
+                  />
+                  <div v-if="infoScreenOn('weather')" class="ml-4 pl-4 mb-3 border-s">
+                    <div class="text-caption text-medium-emphasis mt-2 mb-2">
+                      Weather: today as a big icon and temperature, and the next four days. It uses the
+                      place and the weather service of the Overlays tab, and needs the frame to be online
+                      when the page is drawn.
+                    </div>
+                  </div>
+<!-- #endif -->
+<!-- #if FEATURE_FUEL_PRICES -->
+                  <v-checkbox
+                    v-model="settingsStore.deviceSettings.infoScreens"
+                    value="fuel"
+                    label="Fuel prices"
+                    density="compact"
+                    hide-details
+                  />
+                  <div v-if="infoScreenOn('fuel')" class="ml-4 pl-4 mb-3 border-s">
+                    <div class="text-caption text-medium-emphasis mt-2 mb-2">
+                      Fuel prices: the cheapest petrol stations around the weather place (Overlays tab) -
+                      Germany only, from tankerkoenig.de. It needs your own free API key from
+                      creativecommons.tankerkoenig.de. The key is stored on the frame and never shown again;
+                      leave the box empty to keep the one that is there.
+                    </div>
+                    <v-text-field
+                      v-model="settingsStore.deviceSettings.fuelApiKey"
+                      label="Tankerkoenig API key"
+                      :placeholder="
+                        settingsStore.deviceSettings.fuelApiKeyConfigured ? 'A key is saved' : 'Paste the key'
+                      "
+                      type="password"
+                      autocomplete="off"
+                      variant="outlined"
+                      density="compact"
+                      hide-details="auto"
+                      class="mb-2"
+                    >
+                      <template v-if="settingsStore.deviceSettings.fuelApiKeyConfigured" #append-inner>
+                        <v-btn size="x-small" variant="text" @click="removeFuelApiKey"> Remove </v-btn>
+                      </template>
+                    </v-text-field>
+                    <v-row dense>
+                      <v-col cols="12" sm="4">
+                        <v-select
+                          v-model="settingsStore.deviceSettings.fuelType"
+                          :items="[
+                            { title: 'Super E5', value: 'e5' },
+                            { title: 'Super E10', value: 'e10' },
+                            { title: 'Diesel', value: 'diesel' },
+                          ]"
+                          label="Fuel"
+                          variant="outlined"
+                          density="compact"
+                          hide-details
+                        />
+                      </v-col>
+                      <v-col cols="6" sm="4">
+                        <v-text-field
+                          v-model.number="settingsStore.deviceSettings.fuelRadiusKm"
+                          label="Radius (km, 1-25)"
+                          type="number"
+                          min="1"
+                          max="25"
+                          variant="outlined"
+                          density="compact"
+                          hide-details
+                        />
+                      </v-col>
+                      <v-col cols="6" sm="4">
+                        <v-text-field
+                          v-model.number="settingsStore.deviceSettings.fuelCount"
+                          label="Stations (1-5)"
+                          type="number"
+                          min="1"
+                          max="5"
+                          variant="outlined"
+                          density="compact"
+                          hide-details
+                        />
+                      </v-col>
+                    </v-row>
+                    <v-switch
+                      v-model="settingsStore.deviceSettings.fuelHideClosed"
+                      label="Leave out stations that are closed"
+                      color="primary"
+                      density="compact"
+                      hide-details
+                      class="mb-2"
+                    />
+<!-- #if FEATURE_ROUTE_TIME -->
+                    <v-divider class="my-3" />
+                    <div class="text-subtitle-2 mb-1">Travel time in the header</div>
+                    <div class="text-caption text-medium-emphasis mb-2">
+                      Shows how long the drive there and back takes right now, with the traffic, in the
+                      header of this page (from TomTom or HERE; a free key of one of them is needed). Enter
+                      the two addresses, press <b>Find</b> and choose the place that is meant - the frame
+                      takes an address over only if the service found it as a street or a house, and
+                      calculated a believable route between the two. A way that takes more than the usual
+                      time plus the limits below is drawn as a red block with a "!". The frame asks when the
+                      page is drawn, so a schedule shortly before you leave shows the traffic of then.
+                    </div>
+                    <v-switch
+                      v-model="settingsStore.deviceSettings.routeEnabled"
+                      label="Show the travel time there and back"
+                      color="primary"
+                      density="compact"
+                      hide-details
+                      class="mb-2"
+                    />
+                    <template v-if="settingsStore.deviceSettings.routeEnabled">
+                      <div v-for="end in routeEnds" :key="end.which" class="mb-3">
+                        <v-text-field
+                          v-model="settingsStore.deviceSettings[end.model]"
+                          :label="end.label"
+                          placeholder="Street 1, 12345 Town"
+                          maxlength="95"
+                          variant="outlined"
+                          density="compact"
+                          hide-details="auto"
+                        >
+                          <template #append-inner>
+                            <v-btn
+                              size="small"
+                              variant="tonal"
+                              :loading="routeState.busy"
+                              @click="routeLookup(end.which)"
+                            >
+                              Find
+                            </v-btn>
+                          </template>
+                        </v-text-field>
+                        <div
+                          v-if="routeState.lookup[end.which]"
+                          class="text-caption text-medium-emphasis mt-1"
+                        >
+                          {{ routeState.lookup[end.which] }}
+                        </div>
+                        <v-radio-group
+                          v-if="routeState.candidates[end.which].length"
+                          v-model="routeState.choice[end.which]"
+                          density="compact"
+                          hide-details
+                        >
+                          <v-radio
+                            v-for="(place, index) in routeState.candidates[end.which]"
+                            :key="index"
+                            :value="index"
+                            :label="place.label + (place.level === 1 ? ' (street only)' : '')"
+                          />
+                        </v-radio-group>
+                        <div
+                          v-if="routeTakenOver(end)"
+                          class="text-caption mt-1"
+                        >
+                          <v-icon size="small" color="success">mdi-check-circle</v-icon>
+                          Taken over: {{ settingsStore.deviceSettings[end.found] }}
+                        </div>
+                      </div>
+                      <v-btn
+                        size="small"
+                        variant="tonal"
+                        :disabled="!routeReady"
+                        :loading="routeState.busy"
+                        class="mb-2"
+                        @click="routeCheck"
+                      >
+                        Check the route and take over both places
+                      </v-btn>
+                      <v-alert
+                        v-if="routeState.message"
+                        type="warning"
+                        variant="tonal"
+                        density="compact"
+                        class="mb-2"
+                      >
+                        {{ routeState.message }}
+                      </v-alert>
+                      <div v-if="routeState.check" class="text-caption mb-2">
+                        <v-icon size="small" color="success">mdi-check-circle</v-icon>
+                        Checked by {{ routeState.check.source }}. Right now: there
+                        {{ routeState.check.there_min }} min, back {{ routeState.check.back_min }} min<span
+                          v-if="routeState.check.free_there_min"
+                        >
+                          (without traffic: {{ routeState.check.free_there_min }} /
+                          {{ routeState.check.free_back_min }} min)</span
+                        >. The places are stored on the frame now; Save Settings keeps the rest.
+                      </div>
+                      <div
+                        v-else-if="!routeEnds.every((end) => routeTakenOver(end))"
+                        class="text-caption mb-2"
+                      >
+                        Not checked yet: the page shows no travel time until both places are taken over.
+                        An address that was changed has to be looked up and checked again.
+                      </div>
+                      <div class="text-subtitle-2 mb-1">The usual time</div>
+                      <div class="text-caption text-medium-emphasis mb-2">
+                        What a way normally takes, in minutes. A way is red when it takes more than this
+                        plus the percentage and the minutes below. Take the times of the last check or the
+                        ones without traffic, or type your own.
+                      </div>
+                      <v-row dense class="mb-1">
+                        <v-col cols="6" sm="3">
+                          <v-text-field
+                            v-model.number="settingsStore.deviceSettings.routeRefThereMin"
+                            label="There (min)"
+                            type="number"
+                            min="0"
+                            max="600"
+                            variant="outlined"
+                            density="compact"
+                            hide-details
+                          />
+                        </v-col>
+                        <v-col cols="6" sm="3">
+                          <v-text-field
+                            v-model.number="settingsStore.deviceSettings.routeRefBackMin"
+                            label="Back (min)"
+                            type="number"
+                            min="0"
+                            max="600"
+                            variant="outlined"
+                            density="compact"
+                            hide-details
+                          />
+                        </v-col>
+                        <v-col cols="12" sm="6" class="d-flex align-center ga-2">
+                          <v-btn
+                            size="small"
+                            variant="text"
+                            :disabled="!routeState.check"
+                            @click="routeAdopt('now')"
+                          >
+                            Use the times now
+                          </v-btn>
+                          <v-btn
+                            size="small"
+                            variant="text"
+                            :disabled="!routeState.check || !routeState.check.free_there_min"
+                            @click="routeAdopt('free')"
+                          >
+                            Use the times without traffic
+                          </v-btn>
+                        </v-col>
+                      </v-row>
+                      <v-row dense class="mb-2">
+                        <v-col cols="6" sm="3">
+                          <v-text-field
+                            v-model.number="settingsStore.deviceSettings.routePercent"
+                            label="Longer by (%)"
+                            type="number"
+                            min="1"
+                            max="100"
+                            variant="outlined"
+                            density="compact"
+                            hide-details
+                          />
+                        </v-col>
+                        <v-col cols="6" sm="3">
+                          <v-text-field
+                            v-model.number="settingsStore.deviceSettings.routeMinExcessMin"
+                            label="and by (min)"
+                            type="number"
+                            min="0"
+                            max="60"
+                            variant="outlined"
+                            density="compact"
+                            hide-details
+                          />
+                        </v-col>
+                        <v-col cols="12" sm="6">
+                          <v-text-field
+                            v-model="settingsStore.deviceSettings.routeLabel"
+                            label="Name on the display (optional)"
+                            placeholder="Work"
+                            maxlength="10"
+                            variant="outlined"
+                            density="compact"
+                            hide-details
+                          />
+                        </v-col>
+                      </v-row>
+                      <div class="text-caption text-medium-emphasis mb-2">
+                        The display shows only this name, never the addresses. Keys: a free one from
+                        developer.tomtom.com or developer.here.com; with both, the second is tried when the
+                        first does not answer. A key is stored on the frame and never shown again; leave the
+                        box empty to keep the one that is there.
+                      </div>
+                      <v-text-field
+                        v-model="settingsStore.deviceSettings.routeKeyTomtom"
+                        label="TomTom API key"
+                        :placeholder="
+                          settingsStore.deviceSettings.routeKeyTomtomConfigured
+                            ? 'A key is saved'
+                            : 'Paste the key'
+                        "
+                        :rules="[routeKeyRule]"
+                        type="password"
+                        autocomplete="off"
+                        variant="outlined"
+                        density="compact"
+                        hide-details="auto"
+                        class="mb-2"
+                      >
+                        <template
+                          v-if="settingsStore.deviceSettings.routeKeyTomtomConfigured"
+                          #append-inner
+                        >
+                          <v-btn size="x-small" variant="text" @click="removeRouteKey('tomtom')">
+                            Remove
+                          </v-btn>
+                        </template>
+                      </v-text-field>
+                      <v-text-field
+                        v-model="settingsStore.deviceSettings.routeKeyHere"
+                        label="HERE API key (optional)"
+                        :placeholder="
+                          settingsStore.deviceSettings.routeKeyHereConfigured
+                            ? 'A key is saved'
+                            : 'Paste the key'
+                        "
+                        :rules="[routeKeyRule]"
+                        type="password"
+                        autocomplete="off"
+                        variant="outlined"
+                        density="compact"
+                        hide-details="auto"
+                        class="mb-2"
+                      >
+                        <template v-if="settingsStore.deviceSettings.routeKeyHereConfigured" #append-inner>
+                          <v-btn size="x-small" variant="text" @click="removeRouteKey('here')">
+                            Remove
+                          </v-btn>
+                        </template>
+                      </v-text-field>
+                    </template>
+<!-- #endif -->
+                  </div>
+<!-- #endif -->
+<!-- #if FEATURE_FINANCE_SNAPSHOT -->
+                  <v-checkbox
+                    v-model="settingsStore.deviceSettings.infoScreens"
+                    value="finance"
+                    label="Exchange rates"
+                    density="compact"
+                    hide-details
+                  />
+                  <div v-if="infoScreenOn('finance')" class="ml-4 pl-4 mb-3 border-s">
+                    <div class="text-caption text-medium-emphasis mt-2 mb-2">
+                      Exchange rates: the reference rates of the European Central Bank for up to four
+                      currencies (1 euro in the currency), the change against the working day before and
+                      the last 30 days as a line. Separate the three-letter codes with commas; empty means
+                      USD, GBP, CHF, JPY. Needs the frame to be online when the page is drawn.
+                    </div>
+                    <v-text-field
+                      v-model="settingsStore.deviceSettings.fxCurrencies"
+                      label="Currencies"
+                      placeholder="USD, GBP, CHF, JPY"
+                      maxlength="159"
+                      variant="outlined"
+                      density="compact"
+                      class="mb-2"
+                    />
+                  </div>
+<!-- #endif -->
+<!-- #if FEATURE_MARKET_QUOTES -->
+                  <v-checkbox
+                    v-model="settingsStore.deviceSettings.infoScreens"
+                    value="markets"
+                    label="Markets (stocks, ETFs, crypto)"
+                    density="compact"
+                    hide-details
+                  />
+                  <div v-if="infoScreenOn('markets')" class="ml-4 pl-4 mb-3 border-s">
+                    <div class="text-caption text-medium-emphasis mt-2 mb-2">
+                      Markets: up to four symbols with the last price, the change against the day before and
+                      the last 30 days as a line. Write them the Yahoo way, separated by commas: shares
+                      <code>AAPL</code>, listings with an exchange suffix <code>EUNL.DE</code>
+                      <code>VOD.L</code>, indices <code>^GDAXI</code>, futures <code>GC=F</code>, crypto
+                      <code>BTC-EUR</code>, currency pairs <code>EURUSD=X</code>. Empty means
+                      AAPL, EUNL.DE, ^GDAXI, BTC-EUR. Needs the frame to be online when the page is drawn; a
+                      price that cannot be fetched is shown from the last good answer, in blue.
+                    </div>
+                    <v-text-field
+                      v-model="settingsStore.deviceSettings.marketSymbols"
+                      label="Symbols"
+                      placeholder="AAPL, EUNL.DE, ^GDAXI, BTC-EUR"
+                      maxlength="159"
+                      variant="outlined"
+                      density="compact"
+                      class="mb-2"
+                    />
+                    <div class="text-caption text-medium-emphasis mb-2">
+                      Sources, tried in this order for each symbol: Yahoo Finance (no key, but an unofficial
+                      interface that may change or refuse), then Twelve Data (twelvedata.com, free key,
+                      800 requests a day; US shares, ETFs, currency pairs, crypto), then Alpha Vantage
+                      (alphavantage.co, free key, 25 requests a day; also .L .DE .TO listings). A key is
+                      stored on the frame and never shown again; leave the box empty to keep the one that is
+                      there.
+                    </div>
+                    <v-switch
+                      v-model="settingsStore.deviceSettings.marketYahoo"
+                      label="Use Yahoo Finance"
+                      color="primary"
+                      density="compact"
+                      hide-details
+                      class="mb-2"
+                    />
+                    <v-text-field
+                      v-model="settingsStore.deviceSettings.marketKeyTwelvedata"
+                      label="Twelve Data API key (optional)"
+                      :placeholder="
+                        settingsStore.deviceSettings.marketKeyTwelvedataConfigured
+                          ? 'A key is saved'
+                          : 'Paste the key'
+                      "
+                      :rules="[marketKeyRule]"
+                      type="password"
+                      autocomplete="off"
+                      variant="outlined"
+                      density="compact"
+                      hide-details="auto"
+                      class="mb-2"
+                    >
+                      <template
+                        v-if="settingsStore.deviceSettings.marketKeyTwelvedataConfigured"
+                        #append-inner
+                      >
+                        <v-btn size="x-small" variant="text" @click="removeMarketKey('twelvedata')">
+                          Remove
+                        </v-btn>
+                      </template>
+                    </v-text-field>
+                    <v-text-field
+                      v-model="settingsStore.deviceSettings.marketKeyAlphavantage"
+                      label="Alpha Vantage API key (optional)"
+                      :placeholder="
+                        settingsStore.deviceSettings.marketKeyAlphavantageConfigured
+                          ? 'A key is saved'
+                          : 'Paste the key'
+                      "
+                      :rules="[marketKeyRule]"
+                      type="password"
+                      autocomplete="off"
+                      variant="outlined"
+                      density="compact"
+                      hide-details="auto"
+                      class="mb-2"
+                    >
+                      <template
+                        v-if="settingsStore.deviceSettings.marketKeyAlphavantageConfigured"
+                        #append-inner
+                      >
+                        <v-btn size="x-small" variant="text" @click="removeMarketKey('alphavantage')">
+                          Remove
+                        </v-btn>
+                      </template>
+                    </v-text-field>
+                  </div>
+<!-- #endif -->
+<!-- #if FEATURE_FACT_OF_THE_DAY -->
+                  <v-checkbox
+                    v-model="settingsStore.deviceSettings.infoScreens"
+                    value="fact"
+                    label="Fact of the day"
+                    density="compact"
+                    hide-details
+                  />
+                  <div v-if="infoScreenOn('fact')" class="ml-4 pl-4 mb-3 border-s">
+                    <div class="text-caption text-medium-emphasis mt-2 mb-2">
+                      Fact of the day: one fact a day from the frame's built-in list, or from your own list
+                      below (one fact per line, as <code>Topic|Fact|Question</code> - topic and question
+                      are optional). Your list is saved on its own with the button under the box, not with
+                      Save Settings.
+                    </div>
+                    <v-textarea
+                      v-model="factsText"
+                      label="Your own facts (optional)"
+                      placeholder="Space|A day on Venus is longer than its year.|Which way does Venus spin?"
+                      rows="4"
+                      auto-grow
+                      counter
+                      variant="outlined"
+                      density="compact"
+                      hide-details="auto"
+                      class="mb-2"
+                    />
+                    <div class="d-flex align-center mb-2" style="gap: 12px">
+                      <v-btn size="small" variant="tonal" :loading="factsBusy" @click="saveFacts">
+                        Save facts
+                      </v-btn>
+                      <span class="text-caption text-medium-emphasis">{{ factsMessage }}</span>
+                    </div>
+                  </div>
+<!-- #endif -->
+<!-- #if FEATURE_RECIPES -->
+                  <v-checkbox
+                    v-model="settingsStore.deviceSettings.infoScreens"
+                    value="recipe"
+                    label="Recipe"
+                    density="compact"
+                    hide-details
+                  />
+                  <div v-if="infoScreenOn('recipe')" class="ml-4 pl-4 mb-3 border-s">
+                    <div class="text-caption text-medium-emphasis mt-2 mb-2">
+                      Recipe: a cooking recipe with its picture, drawn for the orientation of the display
+                      (Settings -> General). A recipe without a picture, or with more text than fits, is
+                      skipped. If nothing is found in three tries the filters are relaxed step by step and
+                      the page says so; if nothing can be loaded at all the last recipe is shown again with
+                      a warning. Needs the frame to be online when the page is drawn.
+                    </div>
+                    <v-select
+                      v-model="settingsStore.deviceSettings.recipeSource"
+                      :items="recipeSourceItems"
+                      label="Source"
+                      variant="outlined"
+                      density="compact"
+                      hide-details
+                      class="mb-2"
+                    />
+                    <v-select
+                      v-if="settingsStore.deviceSettings.recipeSource === 'day'"
+                      v-model="settingsStore.deviceSettings.recipeVariant"
+                      :items="recipeVariantItems"
+                      label="Recipe of the day"
+                      variant="outlined"
+                      density="compact"
+                      hide-details
+                      class="mb-2"
+                    />
+                    <template v-if="settingsStore.deviceSettings.recipeSource === 'search'">
+                      <div class="text-caption text-medium-emphasis mb-2">
+                        The preparation time (the working time, not the total time the page shows), the
+                        rating and the order are asked of Chefkoch itself. The other filters are added to
+                        the search words, so they narrow the choice but are not exact. With no filter a
+                        random recipe of the first thousand of the order is shown.
+                      </div>
+                      <v-text-field
+                        v-model="settingsStore.deviceSettings.recipeQuery"
+                        label="Search words (optional)"
+                        maxlength="47"
+                        variant="outlined"
+                        density="compact"
+                        hide-details
+                        class="mb-2"
+                      />
+                      <v-row dense>
+                        <v-col cols="12" sm="6">
+                          <v-select
+                            v-model="settingsStore.deviceSettings.recipeCategory"
+                            :items="recipeCategoryItems"
+                            label="Category"
+                            variant="outlined"
+                            density="compact"
+                            hide-details
+                          />
+                        </v-col>
+                        <v-col cols="12" sm="6">
+                          <v-select
+                            v-model="settingsStore.deviceSettings.recipeCountry"
+                            :items="recipeCountryItems"
+                            label="Country or cuisine"
+                            variant="outlined"
+                            density="compact"
+                            hide-details
+                          />
+                        </v-col>
+                        <v-col cols="12" sm="6">
+                          <v-select
+                            v-model="settingsStore.deviceSettings.recipeMeal"
+                            :items="recipeMealItems"
+                            label="Type of meal"
+                            variant="outlined"
+                            density="compact"
+                            hide-details
+                          />
+                        </v-col>
+                        <v-col cols="12" sm="6">
+                          <v-select
+                            v-model="settingsStore.deviceSettings.recipeHealth"
+                            :items="recipeHealthItems"
+                            label="Diet"
+                            variant="outlined"
+                            density="compact"
+                            hide-details
+                          />
+                        </v-col>
+                        <v-col cols="12" sm="6">
+                          <v-select
+                            v-model="settingsStore.deviceSettings.recipeProperty"
+                            :items="recipePropertyItems"
+                            label="Property"
+                            variant="outlined"
+                            density="compact"
+                            hide-details
+                          />
+                        </v-col>
+                        <v-col cols="12" sm="6">
+                          <v-select
+                            v-model="settingsStore.deviceSettings.recipeSort"
+                            :items="recipeSortItems"
+                            label="Order"
+                            variant="outlined"
+                            density="compact"
+                            hide-details
+                          />
+                        </v-col>
+                        <v-col cols="12" sm="6">
+                          <v-select
+                            v-model="settingsStore.deviceSettings.recipeMaxMinutes"
+                            :items="recipeTimeItems"
+                            label="Preparation time"
+                            variant="outlined"
+                            density="compact"
+                            hide-details
+                          />
+                        </v-col>
+                        <v-col cols="12" sm="6">
+                          <v-select
+                            v-model="settingsStore.deviceSettings.recipeMinRating"
+                            :items="recipeRatingItems"
+                            label="Rating"
+                            variant="outlined"
+                            density="compact"
+                            hide-details
+                          />
+                        </v-col>
+                      </v-row>
+                    </template>
+                    <template v-if="settingsStore.deviceSettings.recipeSource === 'mealdb'">
+                      <v-select
+                        v-model="settingsStore.deviceSettings.recipeMealdbCategory"
+                        :items="recipeMealdbItems"
+                        label="Category"
+                        variant="outlined"
+                        density="compact"
+                        hide-details
+                        class="mb-2"
+                      />
+                      <v-text-field
+                        v-model="settingsStore.deviceSettings.recipeMealdbKey"
+                        label="TheMealDB key (optional)"
+                        :placeholder="
+                          settingsStore.deviceSettings.recipeMealdbKeyConfigured
+                            ? 'A key is saved'
+                            : 'The free test key is used'
+                        "
+                        :rules="[mealDbKeyRule]"
+                        type="password"
+                        autocomplete="off"
+                        variant="outlined"
+                        density="compact"
+                        hide-details="auto"
+                        class="mb-2"
+                      >
+                        <template
+                          v-if="settingsStore.deviceSettings.recipeMealdbKeyConfigured"
+                          #append-inner
+                        >
+                          <v-btn size="x-small" variant="text" @click="removeMealDbKey">
+                            Remove
+                          </v-btn>
+                        </template>
+                      </v-text-field>
+                      <div class="text-caption text-medium-emphasis mb-2">
+                        Without a key of your own the free test key "1" is used, which TheMealDB offers for
+                        development and learning; a key of a supporter of theirs is meant for use that is
+                        public. The key is stored on the frame and never shown again.
+                      </div>
+                    </template>
+                    <v-switch
+                      v-model="settingsStore.deviceSettings.recipeImage"
+                      label="Show the picture"
+                      color="primary"
+                      density="compact"
+                      hide-details
+                    />
+                    <v-switch
+                      v-model="settingsStore.deviceSettings.recipeQr"
+                      label="QR code of the recipe's address"
+                      color="primary"
+                      density="compact"
+                      hide-details
+                    />
+                  </div>
+<!-- #endif -->
+                </v-expansion-panel-text>
+              </v-expansion-panel>
+<!-- #endif -->
+              <v-expansion-panel value="appearance">
+                <v-expansion-panel-title>
+                  <span class="text-subtitle-2">Appearance and colors</span>
+                </v-expansion-panel-title>
+                <v-expansion-panel-text>
+                  <div class="text-caption text-medium-emphasis mb-2">
+                    Layout only matters when both ToDo and Calendar are shown together - portrait boards
+                    always stack them regardless of this setting (a side-by-side split would make each
+                    column too narrow there).
+                  </div>
+                  <v-radio-group
+                    v-model="settingsStore.deviceSettings.agendaStackLayout"
+                    :disabled="
+                      !(
+                        settingsStore.deviceSettings.agendaTodoEnabled &&
+                        settingsStore.deviceSettings.agendaCalEnabled
+                      )
+                    "
+                    inline
+                    density="compact"
+                    hide-details
+                    class="mb-4"
+                  >
+                    <v-radio label="Stacked (ToDo above Calendar)" :value="true" />
+                    <v-radio label="Side by side" :value="false" />
+                  </v-radio-group>
+                  <div class="text-caption text-medium-emphasis mb-2">
+                    The ToDo column always uses a plain black-on-white page. The Calendar column's entire
+                    appearance - background, header colors, per-source colors, and marking - is controlled
+                    by the Color Profile you import below instead.
+                  </div>
+
+                  <template v-if="!agendaIsGrayscaleBoard">
+                    <v-divider class="mb-4 mt-4" />
+                    <div class="text-subtitle-2 mb-2">ToDo Colors</div>
+                    <div class="text-caption text-medium-emphasis mb-3">
+                      Color panels only - grayscale boards have no spare hue to assign here. Any color
+                      that happens to match the fixed white page is automatically swapped for a safe
+                      fallback, so nothing can silently disappear.
+                    </div>
+                    <v-row dense>
+                      <v-col
+                        v-for="field in agendaTodoColorFields"
+                        :key="field.key"
+                        cols="6"
+                        sm="4"
+                        md="3"
+                      >
+                        <v-select
+                          v-model="settingsStore.deviceSettings[field.key]"
+                          :items="agendaHueOptions"
+                          :label="field.label"
+                          variant="outlined"
+                          density="compact"
+                          hide-details
+                        />
+                      </v-col>
+                    </v-row>
+                  </template>
+
+                  <v-divider class="mb-4 mt-4" />
+                  <div class="text-subtitle-2 mb-2">Calendar Color Profiles</div>
+                  <div class="text-caption text-medium-emphasis mb-3">
+                    Import a color profile JSON exported from the standalone "profile-editor.html" visual
+                    editor tool to control exactly how the Calendar view is colored - text/background,
+                    per-day headers, the shared top header, each Calendar source's color, and (if a
+                    rotation pattern is set above) which single color marks a day. Up to 3 profiles can be
+                    stored on the device; only one is active at a time. On a grayscale/monochrome display,
+                    a color-mode profile is shown as a plain black/white inversion instead of its authored
+                    hues - its "mode" only matters directly on a color panel.
+                  </div>
+                  <v-btn
+                    variant="outlined"
+                    size="small"
+                    class="mb-4"
+                    href="/profile-editor.html"
+                    target="_blank"
+                    rel="noopener"
+                  >
+                    Open Color Profile Editor
+                  </v-btn>
+                  <div class="text-caption text-medium-emphasis mb-3">
+                    Opens the editor tool served directly by this device (new tab). It draws the same
+                    picture as this frame, and its "Send to frame" button saves straight into a slot
+                    below, no manual export/import round-trip needed.
+                  </div>
+                  <v-select
+                    v-model="settingsStore.deviceSettings.agendaColorProfileActive"
+                    :items="agendaColorProfileActiveOptions"
+                    item-title="title"
+                    item-value="value"
+                    label="Active profile"
+                    variant="outlined"
+                    density="compact"
+                    hide-details
+                    class="mb-4"
+                    style="max-width: 420px"
+                  />
+                  <v-row dense>
+                    <v-col v-for="slot in [1, 2, 3]" :key="slot" cols="12" sm="4">
+                      <v-card variant="tonal">
+                        <v-card-text>
+                          <div class="text-caption text-medium-emphasis">Slot {{ slot }}</div>
+                          <div class="text-body-2 mb-2">
+                            {{ agendaColorProfileSlots.find((s) => s.slot === slot)?.name || "(empty)" }}
+                          </div>
+                          <v-btn
+                            size="small"
+                            variant="outlined"
+                            :loading="agendaColorProfileUploading[slot]"
+                            @click="colorProfileFileInputs[slot]?.click()"
+                          >
+                            Import
+                          </v-btn>
+                          <v-btn
+                            v-if="agendaColorProfileSlots.find((s) => s.slot === slot)?.name"
+                            size="small"
+                            variant="outlined"
+                            class="ml-2"
+                            @click="exportAgendaColorProfile(slot)"
+                          >
+                            Export
+                          </v-btn>
+                          <v-btn
+                            v-if="agendaColorProfileSlots.find((s) => s.slot === slot)?.name"
+                            size="small"
+                            variant="outlined"
+                            color="error"
+                            class="ml-2"
+                            @click="deleteAgendaColorProfile(slot)"
+                          >
+                            Remove
+                          </v-btn>
+                          <input
+                            :ref="(el) => (colorProfileFileInputs[slot] = el)"
+                            type="file"
+                            accept=".json,application/json"
+                            style="display: none"
+                            @change="onAgendaColorProfileFileSelected($event, slot)"
+                          />
+                        </v-card-text>
+                      </v-card>
+                    </v-col>
+                  </v-row>
+                </v-expansion-panel-text>
+              </v-expansion-panel>
+            </v-expansion-panels>
           </v-tabs-window-item>
 
 <!-- #endif -->
@@ -2981,12 +4735,57 @@ async function performFactoryReset() {
             </div>
             <v-checkbox
               v-model="settingsStore.deviceSettings.captionInvertColorsEnabled"
+<!-- #if FEATURE_TEXT_OUTLINE -->
+              label="Also apply color inversion and text style to Telegram and photo-date captions"
+<!-- #else -->
               label="Also apply color inversion to Telegram photo captions"
+<!-- #endif -->
               color="primary"
               density="compact"
               hide-details
               class="mb-4"
             />
+
+<!-- #if FEATURE_TEXT_OUTLINE -->
+            <div class="text-subtitle-2 mb-2">Text style</div>
+            <v-row dense class="mb-1">
+              <v-col cols="12" sm="8">
+                <v-select
+                  v-model="settingsStore.deviceSettings.overlayTextStyle"
+                  :items="[
+                    { title: 'Bar across the picture (default)', value: 'bar' },
+                    { title: 'White text with a black border, no bar', value: 'white' },
+                    { title: 'Black text with a white border, no bar', value: 'black' },
+                  ]"
+                  label="Overlay text style"
+                  variant="outlined"
+                  density="compact"
+                  hide-details
+                />
+              </v-col>
+              <v-col cols="12" sm="4">
+                <v-select
+                  v-model="settingsStore.deviceSettings.overlayTextBorder"
+                  :items="[
+                    { title: '1 pixel', value: 1 },
+                    { title: '2 pixels', value: 2 },
+                  ]"
+                  :disabled="settingsStore.deviceSettings.overlayTextStyle === 'bar'"
+                  label="Border width"
+                  variant="outlined"
+                  density="compact"
+                  hide-details
+                />
+              </v-col>
+            </v-row>
+            <div class="text-caption text-medium-emphasis mb-4">
+              Without a bar the weather and headline lines and, with the checkbox above, the
+              captions are drawn as text alone with a border, so the picture stays visible behind
+              them. Weather icons get the same border. With a text style the invert switch above
+              does not apply - the style chooses the colors. 2 pixels read better on a busy
+              picture.
+            </div>
+<!-- #endif -->
 
             <v-switch
               v-model="settingsStore.deviceSettings.overlayEpdgzEnabled"
@@ -3924,6 +5723,117 @@ async function performFactoryReset() {
                   <v-icon start>mdi-folder-move</v-icon>
                   Organize Crop Folders
                 </v-btn>
+              </v-col>
+            </v-row>
+
+            <v-divider class="my-6" />
+
+<!-- #endif -->
+<!-- #if FEATURE_UPLOAD_DEDUP -->
+            <div class="text-subtitle-1 mb-4">Duplicate Images</div>
+            <v-row>
+              <v-col cols="12">
+                <v-select
+                  v-model="settingsStore.deviceSettings.dedupMode"
+                  :items="[
+                    { title: 'Refuse it (reply: already in the album)', value: 'skip' },
+                    { title: 'Store it, but say so', value: 'warn' },
+                    { title: 'Do nothing (no check)', value: 'off' },
+                  ]"
+                  label="When an upload is already in the album"
+                  variant="outlined"
+                  density="compact"
+                  class="mb-2"
+                />
+                <v-select
+                  v-model="settingsStore.deviceSettings.dedupHash"
+                  :items="[
+                    { title: 'The file - the same bytes', value: 'stored' },
+                    { title: 'The picture - the same pixels', value: 'payload' },
+                  ]"
+                  label="What counts as the same image"
+                  variant="outlined"
+                  density="compact"
+                  class="mb-2"
+                />
+                <div class="text-caption text-medium-emphasis mb-2">
+                  Every album keeps a small list of the MD5 of its images. "The file" catches the
+                  same upload twice; "The picture" also catches one photo converted by two
+                  browsers (their compressed files differ, the pixels do not) - it takes a little
+                  longer per upload. Changing this only affects images added from now on; index the
+                  earlier ones again below.
+                </div>
+                <v-switch
+                  v-model="settingsStore.deviceSettings.dedupIndexExisting"
+                  label="Index the images that were there before, in the background"
+                  color="primary"
+                  hide-details
+                />
+                <div class="text-caption text-medium-emphasis mb-4">
+                  Switching this on (and saving) starts indexing at once, and again every time the
+                  frame starts up. It reads every image once - minutes for a large album - and
+                  keeps the frame awake while it does.
+                </div>
+
+                <v-select
+                  v-model="dedupAlbum"
+                  :items="[{ title: 'All albums', value: '' }, ...appStore.sortedAlbums.map((a) => a.name)]"
+                  label="Album"
+                  variant="outlined"
+                  density="compact"
+                  hide-details
+                  style="max-width: 260px"
+                  class="mb-3"
+                />
+                <div class="d-flex flex-wrap align-center ga-2">
+                  <v-btn
+                    variant="outlined"
+                    :loading="dedupBusy || dedupStatus?.running"
+                    @click="dedupStartIndexing"
+                  >
+                    <v-icon start>mdi-database-search</v-icon>
+                    Index now
+                  </v-btn>
+                  <v-btn
+                    variant="outlined"
+                    :disabled="!dedupAlbum"
+                    :loading="dedupBusy"
+                    @click="dedupFindDuplicates"
+                  >
+                    <v-icon start>mdi-content-duplicate</v-icon>
+                    Find duplicates
+                  </v-btn>
+                  <span class="text-caption text-medium-emphasis">{{ dedupProgress }}</span>
+                </div>
+
+                <template v-if="dedupReport">
+                  <div class="text-body-2 mt-4">
+                    {{ dedupReport.indexed }} of {{ dedupReport.images }} images in
+                    "{{ dedupReport.album }}" are indexed<span
+                      v-if="dedupReport.indexed < dedupReport.images"
+                    >
+                      - use "Index now" first for the rest</span
+                    >.
+                    <span v-if="dedupReport.groups.length === 0">No duplicates found.</span>
+                  </div>
+                  <v-list v-if="dedupReport.groups.length" density="compact" class="mt-2">
+                    <template v-for="(group, i) in dedupReport.groups" :key="i">
+                      <v-list-subheader>The same image, {{ group.length }} times</v-list-subheader>
+                      <v-list-item v-for="file in group" :key="file" :title="file">
+                        <template #append>
+                          <v-btn
+                            size="small"
+                            variant="text"
+                            color="error"
+                            icon="mdi-delete"
+                            :title="'Delete ' + file"
+                            @click="dedupDelete(file)"
+                          />
+                        </template>
+                      </v-list-item>
+                    </template>
+                  </v-list>
+                </template>
               </v-col>
             </v-row>
 

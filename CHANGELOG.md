@@ -17,17 +17,50 @@ has a 2.19 and it is merged in: `v219.0.0`, then `v219.0.1`, ...).
 
 ## [Unreleased]
 
+### Added
+
+- **Option `text-outline`: overlay and caption text without a bar, with a 1 or 2 pixel border** (extended line only; needs `overlays`; part of `extras`).
+  The weather and headline overlays and the captions were always a black (or inverted, white) bar across the picture. With the option **Settings -> Overlays -> Text style**
+  offers the text alone: white text with a black border or black text with a white border, the border 1 or 2 pixels wide (2 by default; 2 reads better on a busy photo).
+  The letters stand where they stand on the bar; weather icons get the same border in the border's colour. The weather and headline lines follow the style at once, the
+  Telegram and capture-date captions only when *Also apply color inversion and text style to ... captions* is ticked (as with the inversion); the battery and climate badges,
+  the error banner and the artworks caption keep their look, and the default is still the bar. API: `overlay_text_style` (`bar`, `white`, `black`) and `overlay_text_border`
+  (1, 2). `text_outline.c` holds the pure helpers, `image_processor.c` draws the border text with the same lines as the bar. 17 host tests (the real drawing, both widths,
+  both styles, icons, the overlay and caption path through a PNG file, the plain functions unchanged). [docs/TEXT_OUTLINE.md](docs/TEXT_OUTLINE.md)
+- **Completed upstream commit migration and feature guarding** (extended line only; part of `extras`):
+  - Implemented rotate/mirror controls (commit 088ecb0) with proper `#if FORK_FIXES` guarding in ImageProcessing.vue
+  - Completed SVG icon bundling (commit 2a561e1) with sprite.svg, Icon.vue component, and main.js updates
+  - Verified and ensured proper feature guarding for all upstream commits:
+    * f422d52 (OTA chunked): 256KB buffer with `#if FORK_FIXES` guarding in ota_manager.c (was already implemented)
+    * 8a55503 (HEIC): HEIC-specific handling (was already implemented)
+    * 474b5a2 (thumbnail check): image.thumbnail validation (was already implemented)
+    * ca77810 (unreadable image): proper error handling (was already implemented)
+    * 17d6a0c (cert_pin CA bundle): certificate pinning with CA bundle verification (was already implemented)
+  All changes properly guarded with `#if FEATURE_X ... #else <exact upstream text> #endif` patterns as required by project maintenance guidelines.
+
 ## [v219.0.4] - 2026-10-14
 
-The colour profile editor draws the frame's own picture; the Calendar view gets a calendar priority, a fixed order and the week number; three small Web UI fixes (the time zone name, the summary of a schedule rule, a link to the repository in the Updates tab); the dotted rule in the day header is visible on every page; a deep-sleep wake a few seconds before its minute is no longer lost; the debug log survives a failed SD write. On upstream v2.19.0 plus its SSID fix (`3e5f3f9`), as before.
+The colour profile editor draws the frame's own picture; the Calendar view gets a calendar priority, a fixed order and the week number; three small Web UI fixes (the time zone name, the summary of a schedule rule, a link to the repository in the Updates tab); the dotted rule in the day header is visible on every page; a deep-sleep wake a few seconds before its minute is no longer lost; the debug log survives a failed SD write. The extended edition adds a live timeline of the schedules (with the "now" line on the frame's own clock) and pictures of the overlays, the forecast on the right and the climate chips. On upstream v2.19.0 plus its SSID fix (`3e5f3f9`), as before.
 
 ### Added
 
+- **Option `agenda-rrule`: monthly and yearly repeats, "the second Monday", "the last Friday", `BYDAY` lists and `BYSETPOS` in the Agenda calendars** (extended line only; needs `agenda`; part of `extras`). The Agenda's own reader takes
+  daily and weekly rules only, so a birthday, "the 15th of every month" or "the last Friday of the month" was left out. With the option the rule goes to the recurrence iterator of
+  [libical](https://github.com/libical/libical) (v4.0.6, vendored unmodified in `components/libical`, used under the MPL-2.0; `docs/third_party/LIBICAL-NOTICE.md`), which knows RFC 5545's rules; `main/calendar_rrule.c` checks a
+  rule before libical sees it (an internal assertion of libical would be a firmware abort), keeps the work bounded and refuses what it cannot judge, so the event is left out as before: `FREQ` below `DAILY`, `RSCALE`/`SKIP`,
+  and three families that libical and python-dateutil read differently (a yearly rule with `BYMONTHDAY` but no `BYMONTH`, a yearly `BYWEEKNO`, a weekly `INTERVAL` > 1 with a `BYDAY` list and a `WKST` of TU..SA). `UNTIL`,
+  `EXDATE`, `RDATE`, `RECURRENCE-ID`, durations, all-day events and the daylight saving time handling are the code of the Agenda fixes below; libical only decides which days a rule hits. Costs +98,160 bytes of flash (measured,
+  Waveshare build), about 16 KB of heap while a rule is expanded (none kept), and a 2 MB feed takes 4.3 - 5.1 s to re-expand on the ESP32-S3, of which 2.0 s is reading the file (the simple expander: 4.5 s). Checked by the adapter
+  against python-dateutil's instances, 50 refused rules, the 97 public calendars of python-recurring-ical-events, thousands of random rules through libical and dateutil, a fuzzer over the rule texts (2.1 million rules, ASan/UBSan; it found a
+  two-byte over-read of a rule ending in `WKST=`, fixed), and on a frame with a debugging build that expanded every series with libical and with the old expander side by side (110 series, no difference; the build is gone again). In a build with the option the
+  reader's own DAILY/WEEKLY expander is not compiled any more - a build with `agenda` only keeps it, and the support matrix in `docs/CALENDAR_RRULE_SUPPORT.md` says which build takes what. See
+  `docs/CALENDAR_RRULE_ENGINE.md`.
 - **Calendar priority, a fixed order of the entries and the calendar week in the Calendar view** (`agenda` option; Web UI: Settings > Agenda > Calendar):
   - **Calendar priority** (`agenda_cal_priority`, default `ABCDE`): the calendars A-E from the most to the least important (`C,A,B,D,E`, `e > d > c > b > a` and so on work too). The entries of a calendar of higher priority are shown above those of a lower one, and when a column or a grid cell has no room for everything, the entries of the *lowest* priority are the ones given up (only counted in *+N more*), wherever in the window they are - a flood of entries from a minor calendar no longer pushes an important appointment out. A setting that does not name each of the five calendars once is refused with a message (`400`).
   - **Order within a day** (`agenda_cal_order`: `priority`, the default, or `time`): the priority first and then the time, or strictly by time with the priority only breaking ties. The order is a total one now: the all-day entries of several calendars all start at midnight, `qsort` put them in an arbitrary order and a different one from one refresh to the next; ties are decided by the end, the calendar and the position in the feed.
   - **Calendar week** (`agenda_cal_show_week`, default on): the ISO week on today's divider/cell and on every Monday's, e.g. `Mo 12. KW42` (`CW42` with the English overlay language). The week arithmetic is pure C (`main/agenda_order.c`) with host tests, including a 60-year walk over the year boundaries.
   - **Rotation pattern in the list layout**: the "2-2-3", "week / week" and "3-4" patterns marked days only in the 7-day grid; the list layout (1-3 days, the default) shows them now too, with the same color profile rules (the mark color on the day header, or a filled block behind the day's entries when the profile's `markColorsHeader` is off). The Web UI shows the setting for both layouts.
+- **A timeline of the schedules, floating beside the editors** (`schedule-pages` option; Web UI): a small window at the bottom right of Settings > Auto Rotate and Settings > Agenda that draws, live as the schedules are edited (nothing has to be saved), what is on the display and for how long - a day or a week, one colour per schedule, the part that is kept (hold or minimum time) strong, held-off fires as hollow circles. It can be dragged, minimized and remembers its place. The decision is a port of the firmware's `main/sched_pick.c` (`webapp/src/utils/schedPick.js`), tested against the C code on 48 schedule sets (`scripts/gen_sched_fixtures.py`); +4.6 KB of Web UI (gzip). See [docs/SCHEDULE_PAGES.md](docs/SCHEDULE_PAGES.md#the-timeline). The "now" line follows the frame's own clock and time zone (`GET /api/time`), not the browser's: with a browser in another zone it had stood hours off the frame's wall-clock times the schedules use. The window is 767 px wide and the axis labels every full hour.
 - **The colour profile editor draws the frame's own picture** (`agenda` option; `profile-editor.html`, guide: `docs/PROFILE_EDITOR.md`): the preview was a hand-made look-alike of the Calendar view
   (other fonts, other cell sizes, no weather icons, dividers or truncation); it is drawn now by a JavaScript copy of the firmware's renderer (`webapp/src/utils/agendaEngine.js`: the 17 x 24 text font, the
   weather icons, grid A and B, the divider dashes, the priority order, `~` and "+N more", the colours of marked days), pixel for pixel. 88 pictures (five panel sizes from 480 x 800 to 1600 x 1200, four profiles) are compared with the
@@ -37,6 +70,7 @@ The colour profile editor draws the frame's own picture; the Calendar view gets 
   priority); **Load from frame** / **Send to frame** with the names of the three slots and the one in use; **Match my frame's settings**. Profiles export and import as before. The page is still one file (the copy of
   the code is written into it by `scripts/sync_profile_editor.py`, a unit test fails when it is out of date) and grows by 14 KB compressed.
 - **The Updates tab links to the repository the frame updates from** (`fixes` option): `GET /api/ota/status` reports the update feed as `repo` (`owner/name`, built in with `--ota-repo`) and the card *Firmware Update (OTA)* shows it as a link. The extended edition's repository has a wiki, which gets a second link (`WIKI_REPOS` in `webapp/src/utils/repoLinks.js`). The READMEs of the base fork and its mirror point to the extended edition's repository.
+- **Pictures of the overlays on a photo, the forecast on the right and the climate chips** (`docs/SCREENSHOTS.md`, `docs/screens/`): drawn by the real overlay and Agenda code on a PC with made-up texts; the weather-right and climate pictures also joined the reference pictures the colour profile editor's engine is tested against (56 in all).
 
 ### Changed
 
@@ -64,7 +98,8 @@ The image is about 750 KB smaller, nothing was taken away; and one fix of the Te
 
 - **The firmware and the update are about 750 KB smaller** (`fixes` option). The boards with internal flash have a 3.5 MiB update slot and the offline Web UI had filled it (a full build for the
   reTerminal E1004 took 3.10 MiB of it, with the extras 3.46 MiB). Measured on the CI images with every option: the Waveshare image went from 2,902,368 to 2,171,456 bytes (-25.2 %), the E1004's from 3.10 to 2.41 MiB,
-  the XIAO EE02's from 3.02 to 2.33 MiB. Four changes, none of which takes a function away:
+  the XIAO EE02's from 3.02 to 2.33 MiB; with the extras the Waveshare image went from 3,274,512 to 2,525,376 bytes (-22.9 %), the E1004's from 3.46 to 2.75 MiB (769 KiB free instead of 40) and the XIAO EE02's
+  from 3.38 to 2.67 MiB. Four changes, none of which takes a function away:
   - the **icon font holds only the icons the Web UI uses** (105 of 7,448; the stylesheet in the firmware went from 596 KB to 130 KB): `webapp/mdi-subset/` has the Vite plugin, the cut-down font and the list,
     a build error when a source uses an icon that is not in it, and `npm run mdi-subset` to cut the font again (Python with `fonttools` and `brotli`);
   - the **example photo of the palette calibration help** is embedded re-encoded: 42 KB instead of 152 KB (JPEG quality 80, same size);
@@ -75,7 +110,7 @@ The image is about 750 KB smaller, nothing was taken away; and one fix of the Te
 
 - **The status text of the Telegram bot lost its last switches** (`telegram` option): `/status` and the wake-up message list 17 switches (625 characters) in buffers of 384 and 900 bytes, so the list ended in the
   middle of its eleventh line. The text has room now (the message buffer is on the heap: the wake-up message is built on the main task, whose stack is small). Found by the `-Os` build, which sees what
-  `-Og` did not; the same build made one more path safe that could have been cut: the one of a preserved Telegram original is skipped when it does not fit.
+  `-Og` did not; the same build made one more path safe that could have been cut: the one of a preserved Telegram original is skipped when it does not fit, and the ones of the artworks files (`artworks`, extended line) are refused instead of cut.
 
 ## [v219.0.2] - 2026-10-10
 
@@ -89,7 +124,7 @@ Fixes only, on upstream v2.19.0. The Web UI fixes come from driving the Web UI o
 - **The gallery did not tell when the frame refused an album or image action** (`fixes` option): creating an album with a name the frame does not take (`a/b`, one that exists), deleting an album or an image and showing an image on the display closed their dialogs as if they had worked. They report the failure now; the New album dialog stays open for correcting the name, and its Create button is off while the name is empty.
 - **Two silent failures of the Web UI** (`fixes` option), found by driving the Web UI of a frame with a script: choosing a file the browser cannot read as an image (damaged, empty, an unsupported format) left a blank preview with an Upload button that did nothing - it says "This file could not be read as an image" now; and importing a file that is valid JSON but no config export (`null`, a number, a list, `{}`) opened the overwrite dialog and ended in "Config imported successfully!" although nothing was sent - it is refused with "This file is not a config export".
 - **The "Display image?" and "Delete image?" dialogs of the gallery asked for a picture that does not exist** (`fixes` option): for an image without a thumbnail they requested `<album>/undefined` - a 404 in the browser console (`GET /api/image?filepath=Default%2Fundefined`) and a broken picture in the dialog. They show no picture now. Found by clicking through the whole Web UI with a script (every tab, panel and control, 900 in all, on a frame) and reading the browser console.
-- **The Settings export failed in a build with the Agenda but without the `fixes` option** (Web UI: *Failed to export config: ReferenceError: exportIncludeSecrets is not defined*, no file was written): the code that leaves the credentials out of an export used a switch that only the `fixes` option declared. It is declared in every build that uses it now. The same mistake made the Alarm Clock's on switch fail with a ReferenceError (instead of the hint "Add a schedule below first") in a build with the Alarm Clock but without the Agenda. Releases are full builds and were not affected. `scripts/migrate/web_bindings.py` now also checks the script of every fenced component for names it uses without declaring them, in every feature set (it only looked at what the templates use), so a fence that cuts a declaration off from its users is found before a build.
+- **The Settings export failed in a build with the Agenda but without the `fixes` option** (Web UI: *Failed to export config: ReferenceError: exportIncludeSecrets is not defined*, no file was written): the code that leaves the credentials out of an export used a switch that only the `fixes` option declared. It is declared in every build that uses it now. The same mistake made the Alarm Clock's on switch fail with a ReferenceError (instead of the hint "Add a schedule below first") in a build with the Alarm Clock but without the Agenda. The `route-time` option's check of its keys (`isRouteKey`) was imported only together with `artworks`, so the Settings store failed on it in a build with the first but not the second. Releases are full builds and were not affected. `scripts/migrate/web_bindings.py` now also checks the script of every fenced component for names it uses without declaring them, in every feature set (it only looked at what the templates use), so a fence that cuts a declaration off from its users is found before a build.
 
 - **Repeating events in the Agenda calendar were an hour off for half the year** (`agenda` option). A daily or weekly series was expanded by adding whole multiples of 24 hours to its first date, so after the clocks
   changed it drifted an hour: a series that began in winter showed up an hour late in summer (09:00 as 10:00), one that began in summer an hour early in winter - and so did the example calendars of the demo package
@@ -124,6 +159,133 @@ This release is `v219.0.0` with the fix below; **`v219.0.0` was withdrawn** (set
 
 ### Added
 
+- **Recipe page** (`--with recipes`, [docs/RECIPES.md](docs/RECIPES.md); part of `extras`, needs `info-screens`): an information page with **one cooking recipe and its picture** - the title in red,
+  the category and time in blue, the ingredients on the left with bullets, the preparation on the right in paragraphs, the picture at the top right and an optional small QR code at the bottom
+  right; in portrait the ingredients and the picture are on top and the preparation runs below over the full width. Sources: **Chefkoch** (the recipe of the day, classic / vegetarian / vegan, or a
+  search with filters: words, category, country, type of meal, diet, property, time, rating, order; German) and **TheMealDB** (by category; English); the labels follow the source's language. The
+  text uses the **largest size at which everything fits** (Noto Sans, SIL OFL, compiled in as bitmaps, 12-30 px, scaled up on big panels); the text flows narrower next to the picture and the code
+  and never overlaps; a recipe without a picture or too long for the page is skipped. Errors: **three tries with exactly the filters that were set**, only then the filters are relaxed step by step
+  (the page says so), and when nothing can be had at all the last recipe is shown again with a warning (none ever fetched: the page is skipped). Characters and step numbers of the sources are
+  cleaned. The options are one NVS text plus TheMealDB's optional write-only key; Web UI card in the Agenda tab; `GET/PATCH /api/config` fields `recipe_*`. New: `recipe_font.c` and
+  `scripts/gen_recipe_font.py`, `recipe_text.c`, `recipe_source.c`, `recipe_layout.c`, `recipe_qr.c`, `recipe_engine.c`, `recipe_service.c`, `screen_recipe.c` (everything but the glue is pure:
+  182 host tests, also under AddressSanitizer / UBSan and a fuzzer, with invented sample answers; `host_tests/render_recipe.cpp` draws the page for all panels without a frame). The sources are unofficial or
+  free interfaces (see the docs for their terms).
+- **Travel time on the fuel page** (`--with route-time`, [docs/ROUTE_TIME.md](docs/ROUTE_TIME.md); part of `extras`, needs `fuel-prices`): the header of the fuel page shows how long the drive
+  there and back between two addresses takes **right now**, with the traffic (`Hin 28 min  Rück 31 min`); a way that takes more than the usual time by a percentage (10) **and** a number of
+  minutes (5) - both settable - is a **red block with a "!"**. Sources: TomTom first, HERE second (a free key of one or both; a refused key, no answer or no requests left
+  continues with the next). The Web UI looks an address up (**Find**), lets you choose among the places the provider found, and takes both over only after the frame has
+  calculated a **believable route both ways** between them (a time and a length above zero, not more than 12 hours, not shorter than the straight line, no absurd detour, not the same
+  place twice); the **coordinates** are stored, nothing is looked up when the page is drawn, and a changed text drops the check. The usual times can be taken from the check (with or
+  without traffic) or typed. The display shows only a name you choose; **the addresses are in an export only if it includes the credentials**; the keys are write-only and never
+  logged, nor are the addresses. No old time is ever shown: without a time the header is as before. New: `route_time.c` (pure: requests, readers of both providers' answers,
+  the believable-route and too-long rules; 34 host tests incl. cut-off and changed answers), `route_service.c` (the providers in order, the five-minute memory; 20 host tests with the
+  HTTP layer faked), the header in `screen_fuel.c`, `POST /api/route/geocode` and `/api/route/check`; web: `utils/routeKey.js`. Run with a real TomTom key on one frame (the address look-up, the check of both ways and the fuel page taking the travel time), and a real HERE key works too (the maintainer's report);
+  **not seen yet:** the red block on the panel. The test answers are assembled from the providers' documentation (the answers of an invalid key were recorded).
+- **Pages per Agenda schedule** (`--with schedule-pages`, [docs/SCHEDULE_PAGES.md](docs/SCHEDULE_PAGES.md); part of `extras`, needs `info-screens`): each schedule of the Agenda can draw
+  its own pages (chips under the schedule card; a rotation counter of its own), so that a schedule at 06:30 always shows the fuel page while the hourly one shows the Agenda. When schedules
+  overlap, **the smaller number wins** (the order of the list is the priority, with up/down arrows), and no display replaces another within the **minimum time between two displays**
+  (15 minutes, adjustable) or the schedule's own **hold time**; the **photo rotation has the lowest priority** and gives way too. A held-off fire does not wake the frame. **Optional:**
+  a schedule with no page ticked behaves as before, and while no schedule has a page nothing of this is in force. Settings: `agenda_cron_pages`, `agenda_cron_hold`, `agenda_gap_min`.
+  New: `sched_pick.c` (pure; 18 host tests, among them a comparison with a literal reference over random schedule sets and across the days the clock changes), `info_screens_next_for()`,
+  `agenda_manager_rotation_seconds_until_next()`; web: `utils/schedulePages.js` (11 tests). Checked on a frame with four overlapping schedules: the three fires that had to draw drew the right
+  pages, the two held-off ones neither drew nor woke the frame.
+- **The markets, exchange-rate and fuel pages say which day their data are from, and the footer is one line.** The header names the trading day of the newest price (`Close 30 Sep`,
+  `Schluss 30.09.`; the ECB's rates `Rates 30 Sep`) instead of a bare date that looked like today's, and a small yellow `!` behind it says that day is older than the last trading day
+  (weekends counted, holidays not known). The source and the fetch time share one line (`Yahoo Finance, Twelve Data - 30 Sep 14:35`, `tankerkoenig.de, CC BY 4.0 - 30 Sep 14:35`), so the
+  rows get a line more; a narrow panel keeps two lines. The time the charts cover is said once in the header (`MARKETS  41 d`) when all lines share it, and every line shows the change over
+  its whole chart (`+6.9%`) next to the change of the last day. New pure helpers: `info_format_stamp_short()`, `info_format_day_label()`, `info_trading_days_behind()`,
+  `info_span_labels()`, `canvas_note_lines()`, `canvas_text_first_fit()`, `canvas_header_label()`, `market_period_change_percent()`, `fx_period_change_percent()`.
+  Checked on a frame (Waveshare PhotoPainter 7.3", 2026-10-02): the markets page took the newest day (the close of the same day) and both pages drew the one-line footer.
+- **Artworks** (`--with artworks`, [docs/ARTWORKS.md](docs/ARTWORKS.md); part of `extras`): a rotation mode that shows a painting, a drawing or a print from a museum. Each
+  rotation draws the kind of work first, then a random work of the Rijksmuseum, SMK (Denmark) or the Smithsonian American Art Museum whose record says public domain or
+  CC0, loads the smallest picture that fits the panel (IIIF fit; baseline JPEG only), makes it display-ready, keeps it in the album `Art` and shows it with a small
+  caption (white text, one-pixel black border, no bar, from a caption file next to the picture). The picture is put on the panel **whole (Fit, the default) or
+  filling it (Cover)** by this mode's own setting, and pictures of the frame's orientation (Display Orientation) are **preferred**: a work of the other format is
+  turned down - before loading if the record has its size (SMK), else from the picture's header - and another asked for, up to three times, the last one taken as it
+  comes (switchable). No network or any failure: a picture of the album - **also when the album is switched off in the Gallery**, a not yet shown one of the right
+  orientation if there is one. Before a
+  new picture is kept and the free space is at or below 20 %, the oldest pictures this mode saved - only those with a caption file, only in that album - are deleted
+  until 30 % is free (both settable); if that is not enough the picture is shown and not kept. Settings in the Auto Rotate tab and `/api/config` (the Smithsonian
+  key is write-only). New: `art_select`/`art_caption`/`art_sources`/`art_store` (pure, host-tested against real answers of the three services, 79 tests, a byte-flip run
+  under ASan/UBSan), `art_flow` (the device side), `image_processor_draw_caption_outlined()`; `http_fetch_get_once()` is built
+  for it as well. Compiled for every board; run on one frame (Waveshare PhotoPainter 7.3", all three museums, one session) - a day of rotation, a full card and a lost network are not seen yet.
+- **Pictures of the display** ([docs/SCREENSHOTS.md](docs/SCREENSHOTS.md), `docs/screens/`): the Agenda in its layouts (7-day grid A and B, ToDo and Calendar stacked and side by side) and in a colour profile, and every
+  information page, with made-up sample data (no real names, places or calendars); also in the user guide to the extras, the page of each option, the README and the demo package. The information pages are drawn
+  by the firmware's own drawing code through `host_tests/render_screens.cpp` (it existed; the page says how to draw them again), the Agenda pictures by the real `agenda_renderer.c` run on a PC with made-up
+  sources by a small program that is not part of the repository.
+- **Extended edition** ([docs/EXTENDED_EDITION.md](docs/EXTENDED_EDITION.md), [docs/EXTENDED_LINE.md](docs/EXTENDED_LINE.md)): this line of the firmware is published next to the base project - source in
+  the branch `extras`, releases, update feed and web flasher in `t3ste/esp32-photoframe-extras`. New: a README notice with the warning about the update feed of self-built frames, a hardware test report
+  issue template, the maintainer's guide for keeping it in step with `main`, and `SITE_REPO` (the demo site's base path and repository links follow the repository it is published from; unset = unchanged).
+- **[docs/EXTRAS_USER_GUIDE.md](docs/EXTRAS_USER_GUIDE.md)**: a user guide to the newer options - what each does, where it is switched on in the Web UI, what to enter and what you need (keys, servers,
+  a place), the notes on the information pages, how keys and passwords are kept, and a table of what to do when a page or calendar does not show up.
+- **`extras` bundle** (`--with extras`): one name for every option added after the first fork release - `webcal`, `multi-upload`, `source-auth`, `caldav`, `caldav-todo`, `upload-dedup`,
+  `glyphs`, `info-screens`, `chore-wheel`, `weather-screen`, `fact-of-the-day`, `finance-snapshot`, `fuel-prices`, `market-quotes` - with what they need (`agenda`, `overlays`). It is not an option of its own: the
+  build, the web app and the listings only see the members. `--without <member>` trims it, `--without extras` takes all of them out of `--all-features`, and a member the board cannot build is skipped with
+  a notice. Shown by `--list-features`; built by the compile matrix (`feature_matrix.py ... extras`) and CI ([docs/FEATURES.md](docs/FEATURES.md)).
+- **`source-auth` build option** (`--with source-auth`, needs `agenda`): a calendar (A-E) or ToDo address may carry a login,
+  `https://user:password@host/path` (special characters percent-encoded); the frame takes it out of the address and answers the server's
+  401 with HTTP Basic or Digest. The address fields stay write-only and out of a normal config export; over plain `http://` the login is only
+  sent when a new setting allows it, a refused login is not retried, and redirects are not followed with a login set
+  ([docs/SOURCE_AUTH.md](docs/SOURCE_AUTH.md)).
+- **`caldav` build option** (`--with caldav`, needs `source-auth`): a calendar address written `caldavs://user:password@host/path` (`caldav://` for
+  plain http) is queried with a CalDAV `REPORT` instead of being downloaded whole - the server sends only the events of the coming days and
+  expands repeating events itself, so monthly/yearly repeats and exceptions (which the on-device reader skips) show up, and a large calendar no
+  longer runs into the 2 MB limit; a server that refuses the expand request is asked again without it
+  ([docs/CALDAV.md](docs/CALDAV.md)).
+- **`glyphs` build option** (`--with glyphs`): ä ö ü Ä Ö Ü ß ° € are drawn as themselves in the text the frame draws (overlay captions and headlines, the Agenda's ToDo and
+  Calendar columns, Telegram captions) instead of being turned into ae/oe/ue/ss or dropped. The umlauts are the font's own letters with two dots, the sharp s, degree and euro signs are
+  drawn in the same 17x24 cell; the text sanitizer keeps them as single bytes 0x80-0x88, so wrapping and centring are unchanged ([docs/GLYPHS.md](docs/GLYPHS.md)).
+- **`caldav-todo` build option** (`--with caldav-todo`, needs `caldav`): a `caldavs://user:password@host/path` (or `caldav://`) address in the Agenda's ToDo
+  field is read as a CalDAV task list - one `REPORT` for the open to-dos (a server that does not know that filter is asked for all and the finished ones
+  are dropped on the frame). Priority 1-9 becomes the A-D chips, a due date the due colour (a UTC time as the frame's local date), finished and cancelled
+  to-dos are left out, a repeating one is listed once; ordered by due date, then priority. The CalDAV query code is shared with `caldav`
+  ([docs/CALDAV_TODO.md](docs/CALDAV_TODO.md)).
+- **`info-screens` build option** (`--with info-screens`, needs `agenda` and `glyphs`): full-screen pages besides the Agenda that take turns with it on the Agenda's
+  schedule - ticked in Settings -> Agenda -> Information screens; each run of the schedule draws the next ticked page (the Agenda is ticked by default, so nothing changes until a page is added),
+  and the schedule also runs when only such a page is ticked. The pages are drawn by plain functions into an RGB canvas (text in the frame's font at 1x-4x, shapes), which is tested on a PC
+  for every panel size ([docs/INFO_SCREENS.md](docs/INFO_SCREENS.md)).
+- **`chore-wheel` build option** (`--with chore-wheel`, needs `info-screens`): a page for the household - a donut wheel with one coloured sector per member and one card per chore; chore `t` of ISO
+  week `w` goes to member `(t + w) mod members`, so the chores move on every Monday. Up to 5 members and 6 chores, names typed in the Web UI (umlauts included), English and German
+  ([docs/CHORE_WHEEL.md](docs/CHORE_WHEEL.md)).
+- **`weather-screen` build option** (`--with weather-screen`, needs `info-screens` and `overlays`): a full-screen weather page in the Agenda's rotation - today's condition as a big icon (drawn
+  from shapes: a yellow sun, outlined clouds, blue rain, a yellow bolt) with a very large temperature, the low under it, and the next four days as rows with weekday, icon, high and low. The numbers are
+  drawn with thick round strokes at any size; the place, service and language are the ones of the Overlays tab; the condition texts are whole words in English and German for every WMO code
+  ([docs/WEATHER_SCREEN.md](docs/WEATHER_SCREEN.md)).
+- **`fact-of-the-day` build option** (`--with fact-of-the-day`, needs `info-screens`): a full-screen page with one fact a day - a red header with the date, the topic as a blue pill, the fact in the biggest text that fits and, if it has one,
+  a yellow question box. 24 built-in facts (original wording, English and German with real umlauts), or your own list: a plain text file, one fact per line as `Topic|Fact|Question`, edited in the Web UI (Settings -> Agenda -> Information
+  screens) and kept on the frame's storage (`GET`/`PUT /api/facts`); the fact is picked by the day, so it stays the same all day ([docs/FACT_OF_THE_DAY.md](docs/FACT_OF_THE_DAY.md)).
+- **`finance-snapshot` build option** (`--with finance-snapshot`, needs `info-screens`): a full-screen exchange-rate page with the reference rates of the European Central Bank - up to four currencies (Settings ->
+  Agenda -> Information screens, `USD, GBP, CHF, JPY` by default), each with the price of one euro in big digits, the change against the working day before as a green or red arrow, and a line chart of the last
+  30 working days. One small request to the ECB's data portal (free, no key); checked against real answers of it ([docs/FINANCE_SNAPSHOT.md](docs/FINANCE_SNAPSHOT.md)).
+- **`fuel-prices` build option** (`--with fuel-prices`, needs `info-screens` and `overlays`): a full-screen page with the cheapest petrol stations around the weather place - brand, street, distance and the price in big digits with the
+  third decimal small like on the pump, the cheapest marked green; fuel type, radius (1-25 km), number of stations and "hide closed" are settings. Germany only (Tankerkoenig, CC BY 4.0, attribution and time of the retrieval
+  on the page); the personal API key is write-only (never returned, only in the export that includes credentials, removable) and never logged. The answer is read one station at a time, so a big one or a cut-off one
+  does no harm; parsed against the service's real answers ([docs/FUEL_PRICES.md](docs/FUEL_PRICES.md)).
+- **`market-quotes` build option** (`--with market-quotes`, needs `info-screens`): a full-screen markets page with up to four symbols - stocks, ETFs, indices, futures, crypto and
+  currency pairs, written the Yahoo way (`AAPL`, `EUNL.DE`, `^GDAXI`, `GC=F`, `BTC-EUR`, `EURUSD=X`) - each with the last price in big digits, the change against the day before
+  and a line of the last 30 days. The prices come from a chain of three sources, tried in this order for each symbol: Yahoo Finance (no key, unofficial, can be switched off), Twelve Data
+  (free key, 800 requests a day) and Alpha Vantage (free key, 25 requests a day); a source is left out when it has no key, does not serve that kind of symbol (symbols are translated to
+  its notation) or its daily quota, which the frame counts, is used up. A source that refuses the key or is out of requests is not asked again in the same draw, and the answer of a source is
+  never re-requested (a new `http_fetch_get_once()` retries only when the server did not answer at all; an HTTP error status - the 401 of a wrong key, which the ESP-IDF client reports as an error of the
+  request - counts as an answer). The last good answers are kept on the storage, so a wake without network or a
+  failed fetch shows the last known prices in blue. The two keys are write-only (never returned, only in the export that includes credentials, removable, never logged). Parsed against
+  real answers of all three services ([docs/MARKET_QUOTES.md](docs/MARKET_QUOTES.md)). Shared with the fuel page: the object-by-object JSON scan (`json_scan.c`), and with the
+  exchange-rate page: the sparkline (`canvas_sparkline()`).
+- **`upload-dedup` build option** (`--with upload-dedup`): every album keeps a small index (`.dedup`) of the MD5 of its images, and an upload the
+  album already has is refused (`409`, naming the file; the Web UI offers "Upload anyway") or stored with a warning - as a setting; compared by the file's
+  bytes or by the decoded pixels (an EPDGZ inside its gzip wrapper, a PNG as RGB), so the same photo converted by two browsers still counts as one. The
+  images that were there before can be indexed in the background (on save and at every start-up, or with "Index now"), and "Find duplicates" lists what an
+  album has twice with a delete button per file; the batch upload skips duplicates unless told otherwise ([docs/UPLOAD_DEDUP.md](docs/UPLOAD_DEDUP.md)).
+- **`multi-upload` build option** (`--with multi-upload`): the Web UI's upload takes a whole selection of files (up to 200) - photos are converted with
+  the current settings one after the other (cover or fit, no editor), pre-rendered `.epdgz` files (for instance from `process-cli`) - and, if ticked,
+  panel-sized PNGs - go up as they are; a queue shows progress and failures. The upload endpoint accepts an image without a thumbnail
+  ([docs/MULTI_UPLOAD.md](docs/MULTI_UPLOAD.md)).
+- **`webcal` build option** (`--with webcal`, needs `agenda`): a `webcal://` or `webcals://` subscription link - what calendar apps hand
+  out for "subscribe" - is accepted for Calendars A-E and fetched over `https://`. Without the option such a link is fetched as is and fails.
+- **`scripts/fetch_art.py`** (a PC helper, not firmware - no build option): fetches curated public-domain artworks from the public
+  paperlesspaper art API, renders them for a chosen board with `process-cli` (cover/fit, the board's resolution, 16-level grey output for the
+  grey panels) and writes an album folder for the SD card or uploads it to a frame, together with an `ATTRIBUTION.md`
+  ([docs/ART_FETCH.md](docs/ART_FETCH.md)).
 - **The demo package is online.** The site's deploy now serves `examples/` below
   `https://t3stier.github.io/esp32-photoframe-rebuild/examples/waveshare_photopainter_73/` (files only - the folder address itself
   has no page; the two configs are `.../demo-config-storage.json` and `.../demo-config-url.json`; the calendars and ToDo list
@@ -151,6 +313,17 @@ This release is `v219.0.0` with the fix below; **`v219.0.0` was withdrawn** (set
   save, MIC-failure and 802.1X rejections counted as rejections) on top of upstream's policy; its *extended retry* and *reprovision when attempts run out* settings no longer had a case to act on - a failure that is
   not a rejection never reached them any more - and are removed (see *Removed* below). Conflicts: 17 files, all inside the guards of the options or in
   files this repository had edited by hand (`process-cli/cli.js` - `--device-config` next to `--board`/`--resolution`, `package.json`).
+- **The Agenda tab of the Web UI is a list of sections** instead of one long page: *ToDo*, *Calendar*, *Extra ICS Calendars*, *Schedule*, *Information screens* and *Appearance and colors*. They start closed; the header of each says
+  what is on (`Calendar on`, `Schedule 3 schedules`, `Information screens Fuel prices, Markets`), and the ones you opened stay open the next time (kept in the browser only). Settings that depend on another are
+  **left out** while that one is off, instead of sitting there greyed out: the settings of an information page (its explanation, the members of the chore wheel, the symbols, *Use Yahoo Finance* and the keys of the
+  markets page, the fuel key and the travel time card ...) show only while the page is ticked; the Calendar's display options only while the Calendar is on (its address fields stay, since it cannot be switched on
+  without one), *Right-align forecast* only with the forecast on, the extra calendars only with the Calendar on; the layout choice for ToDo and Calendar is greyed out unless both are on. Nothing was removed and
+  no setting changed its meaning. Only with `--with agenda`; a build without it has no Agenda tab.
+- **The information pages with data from the internet say when the data were fetched, and the charts say how long they run.** Weather, exchange rates, fuel prices and markets end with a small
+  note, `Updated 30 Sep 14:35` (`Stand 30.09. 14:35`) - the local time of the fetch; the markets page shows the time of its newest fetch, so a page drawn from the kept prices says how old they are.
+  Without a clock that was ever set there is no note (a wrong time is worse than none). The fuel page's footer, which had the time only, has the same note now. The exchange-rate and markets
+  rows show the span of the line under it (`41 d`, `41 T`: calendar days from the first to the last point). New pure helpers in `info_screens_core`: `info_days_between()`, `info_format_stamp()`,
+  `info_format_span()`.
 - Upstream `f5e3ec9` is merged (six commits of 2026-09-29, all about crash reports): **core dumps are captured in every build**, in the 56 KiB that were free below `ota_0` (the partition table
   generator puts the `coredump` partition there on every board layout); the last crash is kept as one record in the settings memory (reason, task, program counter, backtrace, firmware version, the ELF's
   SHA-256), reported by `GET /api/system-info` as `last_crash`, shown in the Maintenance tab (**Last crash**, with a copy button) and cleared by `POST /api/crash/clear`; the CI attaches each board's
@@ -175,6 +348,27 @@ This release is `v219.0.0` with the fix below; **`v219.0.0` was withdrawn** (set
 
 ### Fixed
 
+- **ToDo & Calendar had a redundant, misleading third on/off switch.** ToDo and Calendar each already have their own switch in
+  their own section; a third one under Information screens, governing the same combined page for the schedule/rotation, could
+  silently disagree with both (both on, this one off: the data neither section promises never shows; or the other way round,
+  costing a wake that draws nothing). Removed; its state always comes from ToDo or Calendar being on, nowhere else - including
+  the one case the tick could still affect after the previous entry's fix, a schedule or the shared rotation with nothing else
+  ticked at all. `agendaScheduleDisabled` (the Schedule section's own enabled/disabled state) also only checked whether a
+  schedule was ever given pages, the same imprecision the previous entry's `sched_pages_effective()` fixed on the firmware side
+  - it now mirrors that precision, so the section reads as disabled whenever nothing would actually fire, not just when nothing
+  was ever configured.
+- **Three more `schedule-pages` issues found while answering the maintainer's own questions about it**: (1) the Recipe page could be ticked for a schedule in the Web UI but was silently dropped on save - a stray `0x7F` mask in `config_manager.c` was one bit short of the 8 information screens (Recipe is the 8th); (2) a schedule given only a page that was later unticked everywhere (or whose only page is ToDo & Calendar while neither is on) still woke the frame on its own schedule to find nothing to draw - it already fell back gracefully (the previous entry's fix, then the pre-existing "nothing configured" guard leaves the display alone), but the wake itself was wasted; `agenda_manager_is_enabled()` now checks whether a schedule's pages are actually in effect, not merely whether they were ever given; (3) a page that is on (ToDo & Calendar, or ticked under Information screens) but is not in any schedule's own list silently never gets drawn once every schedule has a list of its own - a warning under the Schedule section now names it. All three confirmed live (on a test frame): Recipe now stays assigned; a stale-only schedule produced no log entry at all at its fire time (before: a fallback message); the warning appeared the moment Recipe was ticked without being added to the schedule, named it, and cleared once unticked again.
+- **A schedule kept drawing a page after it was switched off under Information screens, and the Schedule section's own hint text was wrong** (`schedule-pages`). The hint said the Agenda schedule "only applies while ToDo and/or Calendar is enabled" - true before `info-screens` existed, but no longer: a ticked information screen or a schedule with pages of its own already keeps it going on its own, confirmed live 2026-09-30, just never corrected in the text. Separately, a schedule's own page picks were independent of the Information screens tick list, so unticking a page there did not stop a schedule that had been given it from continuing to draw it - the two are now kept in step: an unticked page's chip in a schedule greys out (its tick is kept, not cleared, and comes back the moment the page is ticked again), and a schedule whose ticked pages have all become unavailable this way draws the shared rotation instead. The ToDo+Calendar page itself was also only ever labelled "Agenda" in these pickers, the same word the settings tab and the schedule section are called, which this also cleans up by labelling it "ToDo & Calendar" instead. 2 new host tests (`main/info_screens_core.c`).
+- **The recipe page was hardened after a code audit** (static warnings, a review of every path that reads data from the internet, and a mutation fuzzer under
+  ASan / UBSan / LeakSanitizer; details in [docs/RECIPES.md](docs/RECIPES.md)): the time (110 s) and the number of requests (30) are checked before **every** request, not
+  only between the tries; an answer nested more than 32 levels is turned down before cJSON parses it (the build allows 1000, which needs ~64 KB of stack on the Xtensa);
+  a picture address must be **https to a domain name** (no IP address, no home-network names, no login or odd port) and the sides of a JPEG are limited and checked
+  against the size the decoder reports (the library multiplies in 32 bit: 40000 x 35792 pixels comes out as 72 704 bytes); the day page's list is looked for in every
+  `ld+json` block; numbers from the answers are clamped instead of cast (an infinity was cast to int, undefined); a step number has at most four digits; an amount above
+  100 kg is not shown; the text cleaning is linear (it was quadratic for a text with many `<` and no `>`); a layout that could not be built is defined and draws a white page;
+  the last recipe read from its file is made safe (every text terminated) and is not written again when it is the same one (flash wear); when every recipe that fits the
+  filters was shown lately one is shown again instead of relaxing the filters; the cleaned search text is whole UTF-8 and cleaning it twice changes nothing.
+  The same weakness of the decoder library was in the **base's photo pipeline** (`image_processor.c`); it is fixed there too (next entry). 29 new host tests (the recipe suites have 182 now).
 - **A JPEG with two frame headers could still make the photo pipeline write past its buffer** (`--with fixes`). Found by upstream's maintainer when reviewing the pull request that carried our
   JPEG fix there (upstream took a different fix and not ours): `esp_jpeg_get_image_info()` reports the size of the **first** SOF0 of a file, while the decoder (tjpgd's `jd_prepare`) takes the **last** one
   before SOS - so a file with a small first frame and a huge second one passed the size check of the entry below with a small buffer and was then decoded at the huge row stride, far past the allocation. The
@@ -191,19 +385,6 @@ This release is `v219.0.0` with the fix below; **`v219.0.0` was withdrawn** (set
   the sequential one goes on with the next photo, the random one tries one other photo of the same pool, and both give up cleanly for that rotation (the next scheduled one tries
   again) if that fails too. PNG is not affected (libpng fails the whole decode). The normal path was checked live: full decode, panel update and "displayed successfully" as before; the failure
   branch itself could not be provoked on demand (a one-off SD glitch) and was reviewed by code.
-- **The Telegram bot token and chat ID were returned in plaintext by `GET /api/config` and so sat in plain view in their own Web UI fields**, pre-existing since the Telegram option was added
-  (`3a55a45b`) - unlike the HTTP API password and the Agenda's calendar URLs, which this project already made write-only on purpose for exactly this reason; the chat ID was not even on the
-  known list of fields this endpoint deliberately returns in plaintext (`docs/MAINTAINING.md`), so it was a plain oversight rather than a considered choice. Found from the maintainer's report of
-  the fields suddenly being visible. Both are write-only now, the same pattern as the Calendar/ToDo addresses: `GET /api/config` reports only `telegram_bot_token_configured` and
-  `telegram_chat_id_configured` (plus the existing combined `telegram_configured`), the Web UI's two fields start blank and are sent only when something new was typed (an empty value
-  no longer clears a token by accident on an unrelated save), and each has its own **Remove** button (`telegram_bot_token_clear`/`telegram_chat_id_clear`). A full export with secrets still
-  includes both, from the existing `/api/config/urls` endpoint, unchanged.
-- **The Telegram card could show a stale, unrelated fetch error as if it were its own.** `last_fetch_error` is one slot shared by every image source (URL, Telegram, Home
-  Assistant, ...); nothing cleared it when `rotation_mode` changed away from the mode that had set it, so a frame once run in URL mode and since switched to Telegram kept
-  showing that old "Connection failed" under the Telegram card indefinitely - found live on a test frame together with the plaintext report above (the message named `ESP_ERR_HTTP_CONNECT`,
-  which only the URL-mode fetch path ever produces, while this frame has been in Telegram mode). `apply_config_from_json` now clears it whenever an incoming `rotation_mode`
-  actually differs from the one stored; checked live by switching the test frame's mode away and back, which cleared it immediately. Any error from the mode actually in use
-  still shows exactly as before.
 - **A web page in a browser on the same network can no longer press buttons on the frame** (`--with fixes`). The API has no
   CORS headers, but a plain cross-site `POST` needs no permission, so any page you visited could send
   `POST /api/factory-reset` (wipes the settings) or `POST /api/config` to the frame, with no password set (the default). A
@@ -243,12 +424,18 @@ This release is `v219.0.0` with the fix below; **`v219.0.0` was withdrawn** (set
 - **The Web UI of a build with only some of the options had parts that did nothing.** The Settings page fences a template part and the script part it uses separately, and four of them
   were fenced by the wrong option: the calendar switches of the Agenda tab sat under the alarm clock (a build with `agenda` but not `alarmclock` had Calendar and Extra calendar
   switches that moved but changed no setting), the temperature unit list of the climate option sat under the alarm clock too (empty with `climate` alone), the message line (`showSnackbar`)
-  was only there with the offline hotspot although the error banner and the chimes use it, and the error-overlay card with its test button showed in builds
+  was only there with the offline hotspot although the error banner, the chimes and the duplicate search use it, and the error-overlay card with its test button showed in builds
   without `error-banner` and failed when pressed. Fixed. `scripts/migrate/web_bindings.py` now checks every feature set for this (see [docs/MAINTAINING.md](docs/MAINTAINING.md)); the
   full build and a build with no option were not affected, and the all-off proof is unchanged.
+- **Markets: the chart could end a day early.** Yahoo's daily bars lag: a bar without a close is left out, and the bar of a day that has just ended may not be complete, so a frame that
+  fetched at midnight could still show the close of the day before yesterday. The page now also takes the latest price Yahoo states for the symbol (`regularMarketPrice` at
+  `regularMarketTime`) as the newest point when that is of a later day than the last bar, and the log says which day each chart ended on (`<symbol> from Yahoo Finance: 30 points, the newest of 2026-10-01`).
+- **Host render harness: the `fact-long` case overran a buffer.** It copied a 63-character title into the 48-byte title of the fact with a plain `strcpy`, which wrote 16 bytes into the text field after it (hidden only
+  because the text was written over it afterwards; a fortified build aborted). It truncates now. Only test code - the firmware's own title handling was not involved.
 - **Agenda: with the frame awake (USB power) the next render came about 25 s too early, and a second one followed at once.** After a render the seconds to the next cron match come from the wall clock, but
-  they were added to the time from before the render (the fetches and the panel's ~20 s refresh), so the next render fired right before the cron boundary and, one second later, again - the Agenda was drawn
-  twice per turn, a wasted refresh of a colour panel. Upstream fixed the same slip for the photo rotation; this is the same one-line change for the Agenda (`power_manager.c`).
+  they were added to the time from before the render (the fetches and the panel's ~20 s refresh), so the next render fired right before the cron boundary and, one second later, again. The Agenda was drawn twice
+  per turn - and with the `info-screens` option the rotation advanced twice, so every other page was on the panel for only a few seconds. Upstream fixed the same slip for the photo rotation; this is the same
+  change for the Agenda. Checked on a frame with a 3-minute schedule and all pages: one render per turn, 179-181 s apart.
 - **OTA: a frame that installed a release candidate is still offered the final release.** The version comparison
   stopped at `major.minor.patch`, so `v218.0.4-rc1` and `v218.0.4` compared equal; with the `fixes` option `-rc<n>`
   now sorts before the same version without a suffix (and `-rc2` before `-rc10`).
@@ -261,6 +448,19 @@ This release is `v219.0.0` with the fix below; **`v219.0.0` was withdrawn** (set
   endpoint now takes optional `offset`/`limit` paging, and the Web UI's gallery fetches bounded pages (60 images)
   instead of the whole album - "Load more" now fetches the next page instead of only revealing more of an
   already-fully-loaded list.
+- **The Telegram bot token and chat ID were returned in plaintext by `GET /api/config` and so sat in plain view in their own Web UI fields**, pre-existing since the Telegram option was added
+  (`3a55a45b`) - unlike the HTTP API password and the Agenda's calendar URLs, which this project already made write-only on purpose for exactly this reason; the chat ID was not even on the
+  known list of fields this endpoint deliberately returns in plaintext (`docs/MAINTAINING.md`), so it was a plain oversight rather than a considered choice. Found from the maintainer's report of
+  the fields suddenly being visible. Both are write-only now, the same pattern as `fuel_api_key`/`market_key_*`: `GET /api/config` reports only `telegram_bot_token_configured` and
+  `telegram_chat_id_configured` (plus the existing combined `telegram_configured`), the Web UI's two fields start blank and are sent only when something new was typed (an empty value
+  no longer clears a token by accident on an unrelated save), and each has its own **Remove** button (`telegram_bot_token_clear`/`telegram_chat_id_clear`). A full export with secrets still
+  includes both, from the existing `/api/config/urls` endpoint, unchanged.
+- **The Telegram card could show a stale, unrelated fetch error as if it were its own.** `last_fetch_error` is one slot shared by every image source (URL, Telegram, Home
+  Assistant, ...); nothing cleared it when `rotation_mode` changed away from the mode that had set it, so a frame once run in URL mode and since switched to Telegram kept
+  showing that old "Connection failed" under the Telegram card indefinitely - found live on a test frame together with the plaintext report above (the message named `ESP_ERR_HTTP_CONNECT`,
+  which only the URL-mode fetch path ever produces, while this frame has been in Telegram mode). `apply_config_from_json` now clears it whenever an incoming `rotation_mode`
+  actually differs from the one stored; checked live by switching the test frame's mode away and back, which cleared it immediately. Any error from the mode actually in use
+  still shows exactly as before.
 
 ## [v218.0.3] - 2026-09-29
 

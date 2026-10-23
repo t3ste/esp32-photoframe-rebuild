@@ -329,6 +329,45 @@ esp_err_t image_processor_add_overlay_to_file(char *path, const char *const *lin
                                               bool draw_climate_hum, const char *climate_hum_text,
                                               climate_category_t climate_hum_category);
 
+#if FEATURE_TEXT_OUTLINE
+/**
+ * @brief image_processor_draw_caption() in the look the user chose for captions (text-outline
+ * option): the bar, or - when "also apply to captions" is on and the overlays use a text style -
+ * the text alone with a black or white border, in the same place. The Telegram and EXIF captions
+ * use this; the error banner's messages keep image_processor_draw_caption() and so keep the bar.
+ */
+void image_processor_draw_caption_look(uint8_t *rgb_buffer, int width, int height,
+                                       const char *caption, bool invert_colors);
+
+/** @brief image_processor_add_caption_to_file() in the look of image_processor_draw_caption_look().
+ */
+esp_err_t image_processor_add_caption_look_to_file(const char *png_path, const char *caption,
+                                                   bool invert_colors);
+#else
+// Without the option the look of a caption is always the bar
+#define image_processor_draw_caption_look image_processor_draw_caption
+#define image_processor_add_caption_look_to_file image_processor_add_caption_to_file
+#endif
+
+#if FEATURE_ARTWORKS
+/**
+ * @brief Draws a small caption without a bar (artworks mode): one line of white text with a
+ * one-pixel black border at the bottom left of an already-processed RGB888 buffer, so it stays
+ * readable on a picture of any brightness. Black and white are the exact display palette values, so
+ * the result stays a valid "processed" picture. The text (UTF-8) is cut with "~" to the width of
+ * the picture. No-op for an empty text.
+ */
+void image_processor_draw_caption_outlined(uint8_t *rgb_buffer, int width, int height,
+                                           const char *text);
+
+/**
+ * @brief image_processor_draw_caption_outlined() on a display-ready PNG or EPDGZ file, rewritten in
+ * place (no re-dithering). `path` is updated if an EPDGZ had to be written as a PNG for lack of
+ * memory. No-op (ESP_OK) for an empty text.
+ */
+esp_err_t image_processor_add_art_caption_to_file(char *path, const char *text);
+#endif
+
 /**
  * @brief Draws a small, fixed-size corner badge (NOT a full-width bar, unlike
  * image_processor_draw_overlay_bar()) in the top-left corner of an

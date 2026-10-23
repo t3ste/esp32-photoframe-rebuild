@@ -1,6 +1,7 @@
 #include "config_manager.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -14,6 +15,21 @@
 #if FORK_ANY
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#endif
+#if FEATURE_ARTWORKS
+#include <ctype.h>
+
+#include "art_select.h"
+#include "art_store.h"
+#endif
+#if FEATURE_RECIPES
+#include "recipe_source.h"
+#endif
+#if FEATURE_TEXT_OUTLINE
+#include "text_outline.h"
+#endif
+#if FEATURE_ROUTE_TIME
+#include "route_time.h"
 #endif
 #include "nvs.h"
 #include "storage.h"
@@ -53,6 +69,7 @@ static int32_t last_index = -1;
 static char image_url[IMAGE_URL_MAX_LEN] = {0};
 static uint8_t *ca_cert_der = NULL;  // Heap-allocated DER certificate
 static size_t ca_cert_der_len = 0;
+static uint32_t ca_cert_generation = 0;
 static char access_token[ACCESS_TOKEN_MAX_LEN] = {0};
 static char http_password[HTTP_PASSWORD_MAX_LEN] = {0};
 static char http_header_key[HTTP_HEADER_KEY_MAX_LEN] = {0};
@@ -121,6 +138,10 @@ static bool overlay_invert_colors = false;
 static bool overlay_epdgz_enabled = false;
 static char overlay_language[OVERLAY_LANGUAGE_MAX_LEN] = OVERLAY_LANGUAGE_DEFAULT;
 static bool caption_invert_colors_enabled = false;
+#if FEATURE_TEXT_OUTLINE
+static uint8_t overlay_text_style = TEXT_STYLE_BAR;
+static uint8_t overlay_text_border = TEXT_BORDER_DEFAULT;
+#endif
 static bool weather_multiline_enabled = false;
 static char weather_icon_set[WEATHER_ICON_SET_MAX_LEN] = WEATHER_ICON_SET_DEFAULT;
 static bool weather_icon_colored = false;
@@ -204,6 +225,102 @@ static bool agenda_cal_e_enabled = false;
 static char agenda_cal_c_url[AGENDA_CAL_C_URL_MAX_LEN] = {0};
 static char agenda_cal_d_url[AGENDA_CAL_D_URL_MAX_LEN] = {0};
 static char agenda_cal_e_url[AGENDA_CAL_E_URL_MAX_LEN] = {0};
+#if FEATURE_SOURCE_AUTH
+static bool source_auth_allow_http = false;
+#endif
+#if FEATURE_INFO_SCREENS
+static uint16_t info_screens_mask = 1;  // only the agenda, until a screen is switched on
+static uint16_t info_screens_rotation = 0;
+#if FEATURE_SCHEDULE_PAGES
+// One bit per information screen (info_screens.h's INFO_SCREEN_COUNT, currently 8 - update this
+// mask by hand if that ever grows past 8; config_manager.c does not include info_screens.h, so
+// the two cannot share the constant directly). A narrower mask here silently drops a schedule's
+// assignment of the uncovered screen(s) - found live: 0x7F (7 bits) dropped Recipe (bit 7).
+#define SCHED_PAGE_MASK_BITS 0xFF
+static uint16_t sched_masks[MAX_CRON_RULES];
+static uint16_t sched_holds[MAX_CRON_RULES];
+static uint16_t sched_rotation[MAX_CRON_RULES];
+static uint16_t sched_gap = SCHED_GAP_DEFAULT_MIN;
+static void sched_pages_load(const char *text);
+static void sched_rotation_load(const char *text);
+#endif
+static char chore_members[INFO_LIST_MAX_LEN] = {0};
+static char chore_tasks[INFO_LIST_MAX_LEN] = {0};
+#if FEATURE_FINANCE_SNAPSHOT
+static char fx_currencies[INFO_LIST_MAX_LEN] = {0};
+#endif
+#if FEATURE_FUEL_PRICES
+static char fuel_api_key[FUEL_API_KEY_MAX_LEN] = {0};
+static uint8_t fuel_type = 1;  // E10
+static uint8_t fuel_radius_km = 5;
+static uint8_t fuel_count = 5;
+static bool fuel_hide_closed = true;
+#endif
+#if FEATURE_ROUTE_TIME
+static bool route_enabled = false;
+static char route_text[2][ROUTE_TEXT_MAX];
+static char route_found[2][ROUTE_TEXT_MAX];
+static double route_lat[2];
+static double route_lon[2];
+static bool route_has_point[2];
+static bool route_checked = false;
+static uint16_t route_ref[2];
+static uint8_t route_percent = ROUTE_PERCENT_DEFAULT;
+static uint8_t route_min_excess = ROUTE_MIN_EXCESS_DEFAULT;
+static char route_label[ROUTE_LABEL_MAX_LEN];
+static char route_key_tomtom[ROUTE_KEY_MAX_LEN];
+static char route_key_here[ROUTE_KEY_MAX_LEN];
+#endif
+#if FEATURE_RECIPES
+static recipe_options_t recipe_opts = {.image = true};  // the recipe of the day, no filter
+static char recipe_mealdb_key[RECIPE_MEALDB_KEY_MAX_LEN];
+#endif
+#if FEATURE_MARKET_QUOTES
+static char market_symbols[INFO_LIST_MAX_LEN] = {0};
+static bool market_yahoo = true;
+static char market_key_td[MARKET_API_KEY_MAX_LEN] = {0};
+static char market_key_av[MARKET_API_KEY_MAX_LEN] = {0};
+static char market_quota[MARKET_QUOTA_TEXT_MAX_LEN] = {0};
+#endif
+#endif
+#if FEATURE_ARTWORKS
+static uint8_t art_types = ART_TYPES_ALL;
+static uint8_t art_sources = ART_SOURCES_ALL;
+static char art_si_key[ART_SI_KEY_MAX_LEN] = {0};
+static bool art_save = true;
+static char art_album[ART_ALBUM_NAME_MAX_LEN] = ART_ALBUM_DEFAULT;
+static uint8_t art_free_min = ART_FREE_MIN_DEFAULT;
+static uint8_t art_free_target = ART_FREE_TARGET_DEFAULT;
+static bool art_caption = true;
+static uint8_t art_scale = ART_SCALE_FIT;
+static bool art_match_orient = true;
+static uint32_t art_seq = 0;
+
+// An album name is a folder name: letters, digits, blank, '-' and '_', not starting or ending with
+// a blank
+static bool art_album_name_valid(const char *name)
+{
+    if (!name) {
+        return false;
+    }
+    size_t len = strlen(name);
+    if (len == 0 || len >= ART_ALBUM_NAME_MAX_LEN || name[0] == ' ' || name[len - 1] == ' ') {
+        return false;
+    }
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char) name[i];
+        if (!isalnum(c) && c != ' ' && c != '-' && c != '_') {
+            return false;
+        }
+    }
+    return true;
+}
+#endif
+#if FEATURE_UPLOAD_DEDUP
+static uint8_t dedup_mode = 1;  // skip
+static uint8_t dedup_hash = 0;  // stored bytes
+static bool dedup_index_existing = false;
+#endif
 static char agenda_cal_c_name[AGENDA_CAL_CDE_NAME_MAX_LEN] = {0};
 static char agenda_cal_d_name[AGENDA_CAL_CDE_NAME_MAX_LEN] = {0};
 static char agenda_cal_e_name[AGENDA_CAL_CDE_NAME_MAX_LEN] = {0};
@@ -1164,6 +1281,16 @@ esp_err_t config_manager_init(void)
             ESP_OK) {
             caption_invert_colors_enabled = (stored_caption_invert != 0);
         }
+#if FEATURE_TEXT_OUTLINE
+        uint8_t stored_text_style = TEXT_STYLE_BAR;
+        if (nvs_get_u8(nvs_handle, NVS_OVERLAY_TEXT_STYLE_KEY, &stored_text_style) == ESP_OK) {
+            overlay_text_style = text_style_clamp(stored_text_style);
+        }
+        uint8_t stored_text_border = TEXT_BORDER_DEFAULT;
+        if (nvs_get_u8(nvs_handle, NVS_OVERLAY_TEXT_BORDER_KEY, &stored_text_border) == ESP_OK) {
+            overlay_text_border = text_border_clamp(stored_text_border);
+        }
+#endif
         uint8_t stored_weather_multiline = 0;
         if (nvs_get_u8(nvs_handle, NVS_WEATHER_MULTILINE_KEY, &stored_weather_multiline) ==
             ESP_OK) {
@@ -1291,6 +1418,197 @@ esp_err_t config_manager_init(void)
         nvs_get_str(nvs_handle, NVS_AGENDA_CAL_D_URL_KEY, agenda_cal_d_url, &agenda_cal_d_url_len);
         size_t agenda_cal_e_url_len = sizeof(agenda_cal_e_url);
         nvs_get_str(nvs_handle, NVS_AGENDA_CAL_E_URL_KEY, agenda_cal_e_url, &agenda_cal_e_url_len);
+#if FEATURE_INFO_SCREENS
+        uint16_t stored_info_u16 = 0;
+        if (nvs_get_u16(nvs_handle, NVS_INFO_SCREENS_KEY, &stored_info_u16) == ESP_OK) {
+            info_screens_mask = stored_info_u16;
+        }
+        if (nvs_get_u16(nvs_handle, NVS_INFO_ROTATION_KEY, &stored_info_u16) == ESP_OK) {
+            info_screens_rotation = stored_info_u16;
+        }
+#if FEATURE_SCHEDULE_PAGES
+        char sched_text[MAX_CRON_RULES * 12] = {0};
+        size_t sched_text_len = sizeof(sched_text);
+        if (nvs_get_str(nvs_handle, NVS_SCHED_PAGES_KEY, sched_text, &sched_text_len) == ESP_OK) {
+            sched_pages_load(sched_text);
+        }
+        sched_text_len = sizeof(sched_text);
+        sched_text[0] = '\0';
+        if (nvs_get_str(nvs_handle, NVS_SCHED_ROT_KEY, sched_text, &sched_text_len) == ESP_OK) {
+            sched_rotation_load(sched_text);
+        }
+        if (nvs_get_u16(nvs_handle, NVS_SCHED_GAP_KEY, &stored_info_u16) == ESP_OK) {
+            sched_gap = stored_info_u16 > SCHED_GAP_MAX_MIN ? SCHED_GAP_MAX_MIN : stored_info_u16;
+        }
+#endif
+        size_t chore_members_len = sizeof(chore_members);
+        nvs_get_str(nvs_handle, NVS_CHORE_MEMBERS_KEY, chore_members, &chore_members_len);
+        size_t chore_tasks_len = sizeof(chore_tasks);
+        nvs_get_str(nvs_handle, NVS_CHORE_TASKS_KEY, chore_tasks, &chore_tasks_len);
+#if FEATURE_FINANCE_SNAPSHOT
+        size_t fx_currencies_len = sizeof(fx_currencies);
+        nvs_get_str(nvs_handle, NVS_FX_CODES_KEY, fx_currencies, &fx_currencies_len);
+#endif
+#if FEATURE_FUEL_PRICES
+        size_t fuel_api_key_len = sizeof(fuel_api_key);
+        nvs_get_str(nvs_handle, NVS_FUEL_API_KEY, fuel_api_key, &fuel_api_key_len);
+        uint8_t stored_fuel = 0;
+        if (nvs_get_u8(nvs_handle, NVS_FUEL_TYPE_KEY, &stored_fuel) == ESP_OK && stored_fuel <= 2) {
+            fuel_type = stored_fuel;
+        }
+        if (nvs_get_u8(nvs_handle, NVS_FUEL_RADIUS_KEY, &stored_fuel) == ESP_OK &&
+            stored_fuel >= 1 && stored_fuel <= 25) {
+            fuel_radius_km = stored_fuel;
+        }
+        if (nvs_get_u8(nvs_handle, NVS_FUEL_COUNT_KEY, &stored_fuel) == ESP_OK &&
+            stored_fuel >= 1 && stored_fuel <= 5) {
+            fuel_count = stored_fuel;
+        }
+        if (nvs_get_u8(nvs_handle, NVS_FUEL_HIDE_CLOSED_KEY, &stored_fuel) == ESP_OK) {
+            fuel_hide_closed = (stored_fuel != 0);
+        }
+#endif
+#if FEATURE_ROUTE_TIME
+        {
+            uint8_t stored_route = 0;
+            if (nvs_get_u8(nvs_handle, NVS_ROUTE_ON_KEY, &stored_route) == ESP_OK) {
+                route_enabled = (stored_route != 0);
+            }
+            static const char *const text_keys[2] = {NVS_ROUTE_FROM_KEY, NVS_ROUTE_TO_KEY};
+            static const char *const found_keys[2] = {NVS_ROUTE_FROM_FND_KEY, NVS_ROUTE_TO_FND_KEY};
+            static const char *const point_keys[2] = {NVS_ROUTE_FROM_LL_KEY, NVS_ROUTE_TO_LL_KEY};
+            for (int i = 0; i < 2; i++) {
+                size_t len = sizeof(route_text[i]);
+                nvs_get_str(nvs_handle, text_keys[i], route_text[i], &len);
+                len = sizeof(route_found[i]);
+                nvs_get_str(nvs_handle, found_keys[i], route_found[i], &len);
+                char point[40] = {0};
+                len = sizeof(point);
+                if (nvs_get_str(nvs_handle, point_keys[i], point, &len) == ESP_OK) {
+                    char *end = NULL;
+                    double lat = strtod(point, &end);
+                    if (end && *end == ',') {
+                        double lon = strtod(end + 1, NULL);
+                        if (lat >= -90.0 && lat <= 90.0 && lon >= -180.0 && lon <= 180.0) {
+                            route_lat[i] = lat;
+                            route_lon[i] = lon;
+                            route_has_point[i] = true;
+                        }
+                    }
+                }
+            }
+            // the check only counts with both places still there
+            if (nvs_get_u8(nvs_handle, NVS_ROUTE_CHK_KEY, &stored_route) == ESP_OK) {
+                route_checked = stored_route != 0 && route_has_point[0] && route_has_point[1];
+            }
+            uint16_t stored_minutes = 0;
+            if (nvs_get_u16(nvs_handle, NVS_ROUTE_REF_A_KEY, &stored_minutes) == ESP_OK) {
+                route_ref[0] = stored_minutes > 600 ? 600 : stored_minutes;
+            }
+            if (nvs_get_u16(nvs_handle, NVS_ROUTE_REF_B_KEY, &stored_minutes) == ESP_OK) {
+                route_ref[1] = stored_minutes > 600 ? 600 : stored_minutes;
+            }
+            if (nvs_get_u8(nvs_handle, NVS_ROUTE_PCT_KEY, &stored_route) == ESP_OK &&
+                stored_route >= 1 && stored_route <= 100) {
+                route_percent = stored_route;
+            }
+            if (nvs_get_u8(nvs_handle, NVS_ROUTE_EXC_KEY, &stored_route) == ESP_OK &&
+                stored_route <= 60) {
+                route_min_excess = stored_route;
+            }
+            size_t label_len = sizeof(route_label);
+            nvs_get_str(nvs_handle, NVS_ROUTE_LBL_KEY, route_label, &label_len);
+            size_t key_len = sizeof(route_key_tomtom);
+            nvs_get_str(nvs_handle, NVS_ROUTE_KEY_TT_KEY, route_key_tomtom, &key_len);
+            key_len = sizeof(route_key_here);
+            nvs_get_str(nvs_handle, NVS_ROUTE_KEY_HERE_KEY, route_key_here, &key_len);
+        }
+#endif
+#if FEATURE_RECIPES
+        {
+            char stored_options[RECIPE_OPTIONS_TEXT_MAX] = {0};
+            size_t options_len = sizeof(stored_options);
+            if (nvs_get_str(nvs_handle, NVS_RECIPE_OPTS_KEY, stored_options, &options_len) ==
+                ESP_OK) {
+                recipe_options_unpack(stored_options, &recipe_opts);
+            }
+            size_t mealdb_key_len = sizeof(recipe_mealdb_key);
+            nvs_get_str(nvs_handle, NVS_RECIPE_MKEY_KEY, recipe_mealdb_key, &mealdb_key_len);
+        }
+#endif
+#if FEATURE_MARKET_QUOTES
+        size_t market_symbols_len = sizeof(market_symbols);
+        nvs_get_str(nvs_handle, NVS_MARKET_SYMBOLS_KEY, market_symbols, &market_symbols_len);
+        uint8_t stored_market_yahoo = 1;
+        if (nvs_get_u8(nvs_handle, NVS_MARKET_YAHOO_KEY, &stored_market_yahoo) == ESP_OK) {
+            market_yahoo = (stored_market_yahoo != 0);
+        }
+        size_t market_key_td_len = sizeof(market_key_td);
+        nvs_get_str(nvs_handle, NVS_MARKET_TD_KEY, market_key_td, &market_key_td_len);
+        size_t market_key_av_len = sizeof(market_key_av);
+        nvs_get_str(nvs_handle, NVS_MARKET_AV_KEY, market_key_av, &market_key_av_len);
+        size_t market_quota_len = sizeof(market_quota);
+        nvs_get_str(nvs_handle, NVS_MARKET_QUOTA_KEY, market_quota, &market_quota_len);
+#endif
+#endif
+#if FEATURE_ARTWORKS
+        uint8_t stored_art = 0;
+        if (nvs_get_u8(nvs_handle, NVS_ART_TYPES_KEY, &stored_art) == ESP_OK) {
+            art_types = stored_art & ART_TYPES_ALL;
+        }
+        if (nvs_get_u8(nvs_handle, NVS_ART_SOURCES_KEY, &stored_art) == ESP_OK) {
+            art_sources = stored_art & ART_SOURCES_ALL;
+        }
+        size_t art_si_key_len = sizeof(art_si_key);
+        nvs_get_str(nvs_handle, NVS_ART_SI_KEY, art_si_key, &art_si_key_len);
+        if (nvs_get_u8(nvs_handle, NVS_ART_SAVE_KEY, &stored_art) == ESP_OK) {
+            art_save = (stored_art != 0);
+        }
+        char stored_album[ART_ALBUM_NAME_MAX_LEN] = {0};
+        size_t stored_album_len = sizeof(stored_album);
+        if (nvs_get_str(nvs_handle, NVS_ART_ALBUM_KEY, stored_album, &stored_album_len) == ESP_OK &&
+            art_album_name_valid(stored_album)) {
+            snprintf(art_album, sizeof(art_album), "%s", stored_album);
+        }
+        uint8_t stored_min = art_free_min, stored_target = art_free_target;
+        nvs_get_u8(nvs_handle, NVS_ART_FREE_MIN_KEY, &stored_min);
+        nvs_get_u8(nvs_handle, NVS_ART_FREE_TO_KEY, &stored_target);
+        int limit_min = stored_min, limit_target = stored_target;
+        art_store_clamp_limits(&limit_min, &limit_target);
+        art_free_min = (uint8_t) limit_min;
+        art_free_target = (uint8_t) limit_target;
+        if (nvs_get_u8(nvs_handle, NVS_ART_CAPTION_KEY, &stored_art) == ESP_OK) {
+            art_caption = (stored_art != 0);
+        }
+        if (nvs_get_u8(nvs_handle, NVS_ART_SCALE_KEY, &stored_art) == ESP_OK &&
+            stored_art <= ART_SCALE_COVER) {
+            art_scale = stored_art;
+        }
+        if (nvs_get_u8(nvs_handle, NVS_ART_ORIENT_KEY, &stored_art) == ESP_OK) {
+            art_match_orient = (stored_art != 0);
+        }
+        nvs_get_u32(nvs_handle, NVS_ART_SEQ_KEY, &art_seq);
+#endif
+#if FEATURE_UPLOAD_DEDUP
+        uint8_t stored_upload_dedup = 0;
+        if (nvs_get_u8(nvs_handle, NVS_DEDUP_MODE_KEY, &stored_upload_dedup) == ESP_OK &&
+            stored_upload_dedup <= 2) {
+            dedup_mode = stored_upload_dedup;
+        }
+        if (nvs_get_u8(nvs_handle, NVS_DEDUP_HASH_KEY, &stored_upload_dedup) == ESP_OK &&
+            stored_upload_dedup <= 1) {
+            dedup_hash = stored_upload_dedup;
+        }
+        if (nvs_get_u8(nvs_handle, NVS_DEDUP_INDEX_KEY, &stored_upload_dedup) == ESP_OK) {
+            dedup_index_existing = (stored_upload_dedup != 0);
+        }
+#endif
+#if FEATURE_SOURCE_AUTH
+        uint8_t stored_source_auth_http = 0;
+        if (nvs_get_u8(nvs_handle, NVS_SOURCE_AUTH_HTTP_KEY, &stored_source_auth_http) == ESP_OK) {
+            source_auth_allow_http = (stored_source_auth_http != 0);
+        }
+#endif
         size_t agenda_cal_c_name_len = sizeof(agenda_cal_c_name);
         nvs_get_str(nvs_handle, NVS_AGENDA_CAL_C_NAME_KEY, agenda_cal_c_name,
                     &agenda_cal_c_name_len);
@@ -2075,6 +2393,9 @@ void config_manager_set_ca_cert_der(const uint8_t *der, size_t len)
         }
     }
 
+    // Increment generation to mark that the certificate has been changed
+    ca_cert_generation++;
+
     nvs_handle_t nvs_handle;
     if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle) == ESP_OK) {
         if (ca_cert_der) {
@@ -2097,6 +2418,51 @@ const uint8_t *config_manager_get_ca_cert_der(size_t *out_len)
     }
     return ca_cert_der;
 }
+#if CONFIG_FEATURE_HTTPS
+bool config_manager_has_ca_cert(void)
+{
+    return ca_cert_der != NULL;
+}
+
+uint8_t *config_manager_copy_ca_cert_der(size_t *out_len, uint32_t *generation)
+{
+    if (out_len) {
+        *out_len = ca_cert_der_len;
+    }
+    if (generation) {
+        *generation = ca_cert_generation;
+    }
+    if (ca_cert_der && ca_cert_der_len > 0) {
+        uint8_t *copy = malloc(ca_cert_der_len);
+        if (copy) {
+            memcpy(copy, ca_cert_der, ca_cert_der_len);
+        }
+        return copy;
+    }
+    return NULL;
+}
+bool config_manager_clear_ca_cert_der_if_unchanged(uint32_t generation)
+{
+    if (ca_cert_generation != generation) {
+        return false;  // Generation mismatch, certificate has changed
+    }
+    free(ca_cert_der);
+    ca_cert_der = NULL;
+    ca_cert_der_len = 0;
+    // Increment generation to mark that the certificate has been cleared
+    ca_cert_generation++;
+
+    nvs_handle_t nvs_handle;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle) == ESP_OK) {
+        nvs_erase_key(nvs_handle, NVS_CA_CERT_KEY);
+        nvs_commit(nvs_handle);
+        nvs_close(nvs_handle);
+    }
+
+    ESP_LOGI(TAG, "CA certificate cleared");
+    return true;
+}
+#endif
 
 void config_manager_set_access_token(const char *token)
 {
@@ -3176,6 +3542,42 @@ bool config_manager_get_caption_invert_colors_enabled(void)
     return caption_invert_colors_enabled;
 }
 
+#if FEATURE_TEXT_OUTLINE
+void config_manager_set_overlay_text_style(int style)
+{
+    overlay_text_style = text_style_clamp(style);
+
+    nvs_handle_t nvs_handle;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle) == ESP_OK) {
+        nvs_set_u8(nvs_handle, NVS_OVERLAY_TEXT_STYLE_KEY, overlay_text_style);
+        nvs_commit(nvs_handle);
+        nvs_close(nvs_handle);
+    }
+}
+
+int config_manager_get_overlay_text_style(void)
+{
+    return overlay_text_style;
+}
+
+void config_manager_set_overlay_text_border(int px)
+{
+    overlay_text_border = text_border_clamp(px);
+
+    nvs_handle_t nvs_handle;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle) == ESP_OK) {
+        nvs_set_u8(nvs_handle, NVS_OVERLAY_TEXT_BORDER_KEY, overlay_text_border);
+        nvs_commit(nvs_handle);
+        nvs_close(nvs_handle);
+    }
+}
+
+int config_manager_get_overlay_text_border(void)
+{
+    return overlay_text_border;
+}
+#endif
+
 void config_manager_set_weather_multiline_enabled(bool enabled)
 {
     weather_multiline_enabled = enabled;
@@ -3591,6 +3993,691 @@ bool config_manager_get_agenda_cal_e_enabled(void)
 {
     return agenda_cal_e_enabled;
 }
+
+#if FEATURE_SCHEDULE_PAGES
+// "mask:hold,mask:hold,..." (one pair per agenda schedule) -> the arrays; what cannot be read is 0
+static void sched_pages_load(const char *text)
+{
+    memset(sched_masks, 0, sizeof(sched_masks));
+    memset(sched_holds, 0, sizeof(sched_holds));
+    const char *p = text;
+    for (int i = 0; i < MAX_CRON_RULES && *p; i++) {
+        char *end = NULL;
+        long mask = strtol(p, &end, 10);
+        if (end == p) {
+            break;
+        }
+        long hold = 0;
+        if (*end == ':') {
+            p = end + 1;
+            hold = strtol(p, &end, 10);
+        }
+        sched_masks[i] = (uint16_t) (mask & SCHED_PAGE_MASK_BITS);
+        sched_holds[i] =
+            (uint16_t) (hold < 0 ? 0 : (hold > SCHED_GAP_MAX_MIN ? SCHED_GAP_MAX_MIN : hold));
+        p = end;
+        if (*p == ',') {
+            p++;
+        }
+    }
+}
+
+static void sched_pages_persist(void)
+{
+    char text[MAX_CRON_RULES * 12];
+    text[0] = '\0';
+    bool any = false;
+    size_t used = 0;
+    for (int i = 0; i < MAX_CRON_RULES; i++) {
+        any = any || sched_masks[i] != 0 || sched_holds[i] != 0;
+        int n = snprintf(text + used, sizeof(text) - used, "%s%u:%u", i ? "," : "",
+                         (unsigned) sched_masks[i], (unsigned) sched_holds[i]);
+        if (n < 0 || (size_t) n >= sizeof(text) - used) {
+            break;
+        }
+        used += (size_t) n;
+    }
+    agenda_nvs_set_str_or_erase(NVS_SCHED_PAGES_KEY, any ? text : "");
+}
+
+static void sched_rotation_load(const char *text)
+{
+    memset(sched_rotation, 0, sizeof(sched_rotation));
+    const char *p = text;
+    for (int i = 0; i < MAX_CRON_RULES && *p; i++) {
+        char *end = NULL;
+        long value = strtol(p, &end, 10);
+        if (end == p) {
+            break;
+        }
+        sched_rotation[i] = (uint16_t) value;
+        p = end;
+        if (*p == ',') {
+            p++;
+        }
+    }
+}
+
+static void sched_rotation_persist(void)
+{
+    char text[MAX_CRON_RULES * 12];
+    size_t used = 0;
+    text[0] = '\0';
+    for (int i = 0; i < MAX_CRON_RULES; i++) {
+        int n = snprintf(text + used, sizeof(text) - used, "%s%u", i ? "," : "",
+                         (unsigned) sched_rotation[i]);
+        if (n < 0 || (size_t) n >= sizeof(text) - used) {
+            break;
+        }
+        used += (size_t) n;
+    }
+    agenda_nvs_set_str(NVS_SCHED_ROT_KEY, text);
+}
+
+uint16_t config_manager_get_sched_mask(int index)
+{
+    return (index >= 0 && index < MAX_CRON_RULES) ? sched_masks[index] : 0;
+}
+
+uint16_t config_manager_get_sched_hold(int index)
+{
+    return (index >= 0 && index < MAX_CRON_RULES) ? sched_holds[index] : 0;
+}
+
+void config_manager_set_sched_pages(const uint16_t masks[MAX_CRON_RULES],
+                                    const uint16_t holds[MAX_CRON_RULES])
+{
+    for (int i = 0; i < MAX_CRON_RULES; i++) {
+        sched_masks[i] = masks[i] & SCHED_PAGE_MASK_BITS;
+        sched_holds[i] = holds[i] > SCHED_GAP_MAX_MIN ? SCHED_GAP_MAX_MIN : holds[i];
+    }
+    sched_pages_persist();
+}
+
+int config_manager_get_sched_gap(void)
+{
+    return sched_gap;
+}
+
+void config_manager_set_sched_gap(int minutes)
+{
+    sched_gap =
+        (uint16_t) (minutes < 0 ? 0 : (minutes > SCHED_GAP_MAX_MIN ? SCHED_GAP_MAX_MIN : minutes));
+    agenda_nvs_set_u16(NVS_SCHED_GAP_KEY, sched_gap);
+}
+
+uint16_t config_manager_get_sched_rotation(int index)
+{
+    return (index >= 0 && index < MAX_CRON_RULES) ? sched_rotation[index] : 0;
+}
+
+void config_manager_set_sched_rotation(int index, uint16_t counter)
+{
+    if (index >= 0 && index < MAX_CRON_RULES) {
+        sched_rotation[index] = counter;
+        sched_rotation_persist();
+    }
+}
+
+bool config_manager_sched_pages_in_use(void)
+{
+    for (int i = 0; i < agenda_cron_rule_count && i < MAX_CRON_RULES; i++) {
+        if (sched_masks[i] != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+#endif
+
+#if FEATURE_INFO_SCREENS
+// Copies a list into its buffer; a text that is too long is cut at a character boundary, so a
+// name never ends in half an umlaut.
+static void copy_info_list(char *dest, size_t size, const char *text)
+{
+    size_t len = text ? strlen(text) : 0;
+    if (len > size - 1) {
+        len = size - 1;
+        while (len > 0 && ((unsigned char) text[len] & 0xC0) == 0x80) {
+            len--;
+        }
+    }
+    if (len > 0) {
+        memcpy(dest, text, len);
+    }
+    dest[len] = 0;
+}
+
+uint32_t config_manager_get_info_screens_mask(void)
+{
+    return info_screens_mask;
+}
+
+void config_manager_set_info_screens_mask(uint32_t mask)
+{
+    info_screens_mask = (uint16_t) mask;
+    agenda_nvs_set_u16(NVS_INFO_SCREENS_KEY, info_screens_mask);
+}
+
+uint32_t config_manager_get_info_screens_rotation(void)
+{
+    return info_screens_rotation;
+}
+
+void config_manager_set_info_screens_rotation(uint32_t counter)
+{
+    info_screens_rotation = (uint16_t) counter;
+    agenda_nvs_set_u16(NVS_INFO_ROTATION_KEY, info_screens_rotation);
+}
+
+const char *config_manager_get_chore_members(void)
+{
+    return chore_members;
+}
+
+void config_manager_set_chore_members(const char *text)
+{
+    copy_info_list(chore_members, sizeof(chore_members), text);
+    agenda_nvs_set_str_or_erase(NVS_CHORE_MEMBERS_KEY, chore_members);
+}
+
+const char *config_manager_get_chore_tasks(void)
+{
+    return chore_tasks;
+}
+
+void config_manager_set_chore_tasks(const char *text)
+{
+    copy_info_list(chore_tasks, sizeof(chore_tasks), text);
+    agenda_nvs_set_str_or_erase(NVS_CHORE_TASKS_KEY, chore_tasks);
+}
+
+#if FEATURE_FINANCE_SNAPSHOT
+const char *config_manager_get_fx_currencies(void)
+{
+    return fx_currencies;
+}
+
+void config_manager_set_fx_currencies(const char *text)
+{
+    copy_info_list(fx_currencies, sizeof(fx_currencies), text);
+    agenda_nvs_set_str_or_erase(NVS_FX_CODES_KEY, fx_currencies);
+}
+#endif
+
+#if FEATURE_FUEL_PRICES
+const char *config_manager_get_fuel_api_key(void)
+{
+    return fuel_api_key;
+}
+
+void config_manager_set_fuel_api_key(const char *key)
+{
+    copy_info_list(fuel_api_key, sizeof(fuel_api_key), key);
+    agenda_nvs_set_str_or_erase(NVS_FUEL_API_KEY, fuel_api_key);
+}
+
+int config_manager_get_fuel_type(void)
+{
+    return fuel_type;
+}
+
+void config_manager_set_fuel_type(int type)
+{
+    fuel_type = (type >= 0 && type <= 2) ? (uint8_t) type : 1;
+    agenda_nvs_set_u8(NVS_FUEL_TYPE_KEY, fuel_type);
+}
+
+int config_manager_get_fuel_radius_km(void)
+{
+    return fuel_radius_km;
+}
+
+void config_manager_set_fuel_radius_km(int km)
+{
+    fuel_radius_km = (uint8_t) (km < 1 ? 1 : (km > 25 ? 25 : km));
+    agenda_nvs_set_u8(NVS_FUEL_RADIUS_KEY, fuel_radius_km);
+}
+
+int config_manager_get_fuel_count(void)
+{
+    return fuel_count;
+}
+
+void config_manager_set_fuel_count(int count)
+{
+    fuel_count = (uint8_t) (count < 1 ? 1 : (count > 5 ? 5 : count));
+    agenda_nvs_set_u8(NVS_FUEL_COUNT_KEY, fuel_count);
+}
+
+bool config_manager_get_fuel_hide_closed(void)
+{
+    return fuel_hide_closed;
+}
+
+void config_manager_set_fuel_hide_closed(bool hide)
+{
+    fuel_hide_closed = hide;
+    agenda_nvs_set_u8(NVS_FUEL_HIDE_CLOSED_KEY, hide ? 1 : 0);
+}
+#endif
+
+#if FEATURE_ROUTE_TIME
+bool config_manager_get_route_enabled(void)
+{
+    return route_enabled;
+}
+
+void config_manager_set_route_enabled(bool enabled)
+{
+    route_enabled = enabled;
+    agenda_nvs_set_u8(NVS_ROUTE_ON_KEY, enabled ? 1 : 0);
+}
+
+const char *config_manager_get_route_text(int which)
+{
+    return (which == 0 || which == 1) ? route_text[which] : "";
+}
+
+const char *config_manager_get_route_found(int which)
+{
+    return (which == 0 || which == 1) ? route_found[which] : "";
+}
+
+bool config_manager_get_route_point(int which, double *lat, double *lon)
+{
+    if ((which != 0 && which != 1) || !route_has_point[which]) {
+        return false;
+    }
+    *lat = route_lat[which];
+    *lon = route_lon[which];
+    return true;
+}
+
+static void route_persist_place(int which)
+{
+    static const char *const text_keys[2] = {NVS_ROUTE_FROM_KEY, NVS_ROUTE_TO_KEY};
+    static const char *const found_keys[2] = {NVS_ROUTE_FROM_FND_KEY, NVS_ROUTE_TO_FND_KEY};
+    static const char *const point_keys[2] = {NVS_ROUTE_FROM_LL_KEY, NVS_ROUTE_TO_LL_KEY};
+    char point[40] = "";
+    if (route_has_point[which]) {
+        snprintf(point, sizeof(point), "%.6f,%.6f", route_lat[which], route_lon[which]);
+    }
+    agenda_nvs_set_str_or_erase(text_keys[which], route_text[which]);
+    agenda_nvs_set_str_or_erase(found_keys[which], route_found[which]);
+    agenda_nvs_set_str_or_erase(point_keys[which], point);
+}
+
+void config_manager_set_route_text(int which, const char *text)
+{
+    if (which != 0 && which != 1) {
+        return;
+    }
+    char cleaned[ROUTE_TEXT_MAX];
+    copy_info_list(cleaned, sizeof(cleaned), text);
+    if (strcmp(cleaned, route_text[which]) == 0) {
+        return;
+    }
+    snprintf(route_text[which], sizeof(route_text[which]), "%s", cleaned);
+    route_found[which][0] = '\0';  // the place found for the old text is no longer the place
+    route_has_point[which] = false;
+    route_checked = false;
+    route_persist_place(which);
+    agenda_nvs_set_u8(NVS_ROUTE_CHK_KEY, 0);
+}
+
+void config_manager_set_route_place(int which, const char *text, const char *found, double lat,
+                                    double lon)
+{
+    if ((which != 0 && which != 1) || lat < -90.0 || lat > 90.0 || lon < -180.0 || lon > 180.0) {
+        return;
+    }
+    copy_info_list(route_text[which], sizeof(route_text[which]), text);
+    copy_info_list(route_found[which], sizeof(route_found[which]), found);
+    route_lat[which] = lat;
+    route_lon[which] = lon;
+    route_has_point[which] = true;
+    route_persist_place(which);
+}
+
+bool config_manager_get_route_checked(void)
+{
+    return route_checked && route_has_point[0] && route_has_point[1];
+}
+
+void config_manager_set_route_checked(bool checked)
+{
+    route_checked = checked && route_has_point[0] && route_has_point[1];
+    agenda_nvs_set_u8(NVS_ROUTE_CHK_KEY, route_checked ? 1 : 0);
+}
+
+int config_manager_get_route_ref(int which)
+{
+    return (which == 0 || which == 1) ? route_ref[which] : 0;
+}
+
+void config_manager_set_route_ref(int which, int minutes)
+{
+    if (which != 0 && which != 1) {
+        return;
+    }
+    route_ref[which] = (uint16_t) (minutes < 0 ? 0 : (minutes > 600 ? 600 : minutes));
+    agenda_nvs_set_u16(which == 0 ? NVS_ROUTE_REF_A_KEY : NVS_ROUTE_REF_B_KEY, route_ref[which]);
+}
+
+int config_manager_get_route_percent(void)
+{
+    return route_percent;
+}
+
+void config_manager_set_route_percent(int percent)
+{
+    route_percent = (uint8_t) (percent < 1 ? 1 : (percent > 100 ? 100 : percent));
+    agenda_nvs_set_u8(NVS_ROUTE_PCT_KEY, route_percent);
+}
+
+int config_manager_get_route_min_excess(void)
+{
+    return route_min_excess;
+}
+
+void config_manager_set_route_min_excess(int minutes)
+{
+    route_min_excess = (uint8_t) (minutes < 0 ? 0 : (minutes > 60 ? 60 : minutes));
+    agenda_nvs_set_u8(NVS_ROUTE_EXC_KEY, route_min_excess);
+}
+
+const char *config_manager_get_route_label(void)
+{
+    return route_label;
+}
+
+void config_manager_set_route_label(const char *label)
+{
+    copy_info_list(route_label, sizeof(route_label), label);
+    agenda_nvs_set_str_or_erase(NVS_ROUTE_LBL_KEY, route_label);
+}
+
+const char *config_manager_get_route_key_tomtom(void)
+{
+    return route_key_tomtom;
+}
+
+void config_manager_set_route_key_tomtom(const char *key)
+{
+    copy_info_list(route_key_tomtom, sizeof(route_key_tomtom), key);
+    agenda_nvs_set_str_or_erase(NVS_ROUTE_KEY_TT_KEY, route_key_tomtom);
+}
+
+const char *config_manager_get_route_key_here(void)
+{
+    return route_key_here;
+}
+
+void config_manager_set_route_key_here(const char *key)
+{
+    copy_info_list(route_key_here, sizeof(route_key_here), key);
+    agenda_nvs_set_str_or_erase(NVS_ROUTE_KEY_HERE_KEY, route_key_here);
+}
+#endif
+
+#if FEATURE_RECIPES
+void config_manager_get_recipe_options(recipe_options_t *out)
+{
+    *out = recipe_opts;
+}
+
+void config_manager_set_recipe_options(const recipe_options_t *options)
+{
+    recipe_opts = *options;
+    recipe_options_sanitize(&recipe_opts);
+    char text[RECIPE_OPTIONS_TEXT_MAX];
+    if (recipe_options_pack(&recipe_opts, text, sizeof(text)) > 0) {
+        agenda_nvs_set_str(NVS_RECIPE_OPTS_KEY, text);
+    }
+}
+
+const char *config_manager_get_recipe_mealdb_key(void)
+{
+    return recipe_mealdb_key;
+}
+
+void config_manager_set_recipe_mealdb_key(const char *key)
+{
+    copy_info_list(recipe_mealdb_key, sizeof(recipe_mealdb_key), key);
+    agenda_nvs_set_str_or_erase(NVS_RECIPE_MKEY_KEY, recipe_mealdb_key);
+}
+#endif
+
+#if FEATURE_MARKET_QUOTES
+const char *config_manager_get_market_symbols(void)
+{
+    return market_symbols;
+}
+
+void config_manager_set_market_symbols(const char *text)
+{
+    copy_info_list(market_symbols, sizeof(market_symbols), text);
+    agenda_nvs_set_str_or_erase(NVS_MARKET_SYMBOLS_KEY, market_symbols);
+}
+
+bool config_manager_get_market_yahoo(void)
+{
+    return market_yahoo;
+}
+
+void config_manager_set_market_yahoo(bool enabled)
+{
+    market_yahoo = enabled;
+    agenda_nvs_set_u8(NVS_MARKET_YAHOO_KEY, enabled ? 1 : 0);
+}
+
+const char *config_manager_get_market_key_twelvedata(void)
+{
+    return market_key_td;
+}
+
+void config_manager_set_market_key_twelvedata(const char *key)
+{
+    copy_info_list(market_key_td, sizeof(market_key_td), key);
+    agenda_nvs_set_str_or_erase(NVS_MARKET_TD_KEY, market_key_td);
+}
+
+const char *config_manager_get_market_key_alphavantage(void)
+{
+    return market_key_av;
+}
+
+void config_manager_set_market_key_alphavantage(const char *key)
+{
+    copy_info_list(market_key_av, sizeof(market_key_av), key);
+    agenda_nvs_set_str_or_erase(NVS_MARKET_AV_KEY, market_key_av);
+}
+
+const char *config_manager_get_market_quota(void)
+{
+    return market_quota;
+}
+
+void config_manager_set_market_quota(const char *text)
+{
+    copy_info_list(market_quota, sizeof(market_quota), text);
+    agenda_nvs_set_str_or_erase(NVS_MARKET_QUOTA_KEY, market_quota);
+}
+#endif
+#endif
+
+#if FEATURE_ARTWORKS
+uint8_t config_manager_get_art_types(void)
+{
+    return art_types;
+}
+
+void config_manager_set_art_types(uint8_t mask)
+{
+    art_types = mask & ART_TYPES_ALL;
+    agenda_nvs_set_u8(NVS_ART_TYPES_KEY, art_types);
+}
+
+uint8_t config_manager_get_art_sources(void)
+{
+    return art_sources;
+}
+
+void config_manager_set_art_sources(uint8_t mask)
+{
+    art_sources = mask & ART_SOURCES_ALL;
+    agenda_nvs_set_u8(NVS_ART_SOURCES_KEY, art_sources);
+}
+
+const char *config_manager_get_art_si_key(void)
+{
+    return art_si_key;
+}
+
+void config_manager_set_art_si_key(const char *key)
+{
+    snprintf(art_si_key, sizeof(art_si_key), "%s", key ? key : "");
+    agenda_nvs_set_str_or_erase(NVS_ART_SI_KEY, art_si_key);
+}
+
+bool config_manager_get_art_save(void)
+{
+    return art_save;
+}
+
+void config_manager_set_art_save(bool enabled)
+{
+    art_save = enabled;
+    agenda_nvs_set_u8(NVS_ART_SAVE_KEY, enabled ? 1 : 0);
+}
+
+const char *config_manager_get_art_album(void)
+{
+    return art_album;
+}
+
+void config_manager_set_art_album(const char *name)
+{
+    if (!art_album_name_valid(name)) {
+        return;
+    }
+    snprintf(art_album, sizeof(art_album), "%s", name);
+    agenda_nvs_set_str(NVS_ART_ALBUM_KEY, art_album);
+}
+
+int config_manager_get_art_free_min(void)
+{
+    return art_free_min;
+}
+
+int config_manager_get_art_free_target(void)
+{
+    return art_free_target;
+}
+
+void config_manager_set_art_free_limits(int free_min_pct, int free_target_pct)
+{
+    art_store_clamp_limits(&free_min_pct, &free_target_pct);
+    art_free_min = (uint8_t) free_min_pct;
+    art_free_target = (uint8_t) free_target_pct;
+    agenda_nvs_set_u8(NVS_ART_FREE_MIN_KEY, art_free_min);
+    agenda_nvs_set_u8(NVS_ART_FREE_TO_KEY, art_free_target);
+}
+
+bool config_manager_get_art_caption(void)
+{
+    return art_caption;
+}
+
+void config_manager_set_art_caption(bool enabled)
+{
+    art_caption = enabled;
+    agenda_nvs_set_u8(NVS_ART_CAPTION_KEY, enabled ? 1 : 0);
+}
+
+int config_manager_get_art_scale(void)
+{
+    return art_scale;
+}
+
+void config_manager_set_art_scale(int scale)
+{
+    art_scale = (scale == ART_SCALE_COVER) ? ART_SCALE_COVER : ART_SCALE_FIT;
+    agenda_nvs_set_u8(NVS_ART_SCALE_KEY, art_scale);
+}
+
+bool config_manager_get_art_match_orient(void)
+{
+    return art_match_orient;
+}
+
+void config_manager_set_art_match_orient(bool enabled)
+{
+    art_match_orient = enabled;
+    agenda_nvs_set_u8(NVS_ART_ORIENT_KEY, enabled ? 1 : 0);
+}
+
+uint32_t config_manager_next_art_seq(void)
+{
+    art_seq++;
+    nvs_handle_t handle;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle) == ESP_OK) {
+        nvs_set_u32(handle, NVS_ART_SEQ_KEY, art_seq);
+        nvs_commit(handle);
+        nvs_close(handle);
+    }
+    return art_seq;
+}
+#endif
+
+#if FEATURE_UPLOAD_DEDUP
+void config_manager_set_dedup_mode(int mode)
+{
+    dedup_mode = (mode >= 0 && mode <= 2) ? (uint8_t) mode : 1;
+    agenda_nvs_set_u8(NVS_DEDUP_MODE_KEY, dedup_mode);
+}
+
+int config_manager_get_dedup_mode(void)
+{
+    return dedup_mode;
+}
+
+void config_manager_set_dedup_hash(int kind)
+{
+    dedup_hash = (kind == 1) ? 1 : 0;
+    agenda_nvs_set_u8(NVS_DEDUP_HASH_KEY, dedup_hash);
+}
+
+int config_manager_get_dedup_hash(void)
+{
+    return dedup_hash;
+}
+
+void config_manager_set_dedup_index_existing(bool on)
+{
+    dedup_index_existing = on;
+    agenda_nvs_set_u8(NVS_DEDUP_INDEX_KEY, on ? 1 : 0);
+}
+
+bool config_manager_get_dedup_index_existing(void)
+{
+    return dedup_index_existing;
+}
+#endif
+
+#if FEATURE_SOURCE_AUTH
+void config_manager_set_source_auth_allow_http(bool allow)
+{
+    source_auth_allow_http = allow;
+    agenda_nvs_set_u8(NVS_SOURCE_AUTH_HTTP_KEY, allow ? 1 : 0);
+}
+
+bool config_manager_get_source_auth_allow_http(void)
+{
+    return source_auth_allow_http;
+}
+#endif
 
 // No etag to clear on change, unlike agenda_cal_url/_url2 above - these
 // three sources have no conditional-GET/periodic refresh at all (see

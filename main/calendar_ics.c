@@ -7,9 +7,16 @@
 #include <string.h>
 #include <strings.h>
 
+#include "calendar_rrule.h"
 #include "esp_log.h"
 #include "http_fetch.h"
 #include "image_processor.h"
+#if FEATURE_CALDAV
+#include <time.h>
+
+#include "caldav.h"
+#include "caldav_fetch.h"
+#endif
 
 static const char *TAG = "calendar_ics";
 
@@ -201,6 +208,10 @@ static void decode_ics_text(const char *in, size_t in_len, char *out, size_t out
     out[o] = '\0';
 }
 
+// The reader's own rule parser and expander (DAILY and WEEKLY) exist only in a build without
+// the option agenda-rrule: with it, calendar_rrule.c (libical) takes every rule and none of this
+// is compiled.
+#if !FEATURE_AGENDA_RRULE
 // RRULE-lite: FREQ=DAILY/WEEKLY only, optional INTERVAL (default 1), COUNT,
 // UNTIL, WKST (ignored, see parse_rrule()), and a single-value BYDAY.
 // Anything else in the rule (a multi-value BYDAY like "MO,WE,FR",
@@ -343,6 +354,7 @@ static bool parse_rrule(const char *value, size_t value_len, ics_rrule_t *out)
     out->supported = have_freq;
     return out->supported;
 }
+#endif  // !FEATURE_AGENDA_RRULE
 
 // A date or date-time of an EXDATE/RDATE value.
 typedef struct {
@@ -373,6 +385,9 @@ typedef struct {
     ics_stamp_t rdates[ICS_MAX_RDATES];
     int n_rdates;
     time_t cand[ICS_MAX_CANDIDATES];
+#if FEATURE_AGENDA_RRULE
+    rrule_wall_t wall[ICS_MAX_CANDIDATES];  // what calendar_rrule_expand() returns
+#endif
     int n_cand;
     int dropped;  // events that did not fit into ICS_MAX_EVENTS
 } ics_ctx_t;
@@ -393,7 +408,12 @@ typedef struct {
     bool have_summary;
 
     bool has_rrule;
+#if FEATURE_AGENDA_RRULE
+    const char *rrule_text;  // the raw value, for calendar_rrule.c (NULL if the line was cut)
+    size_t rrule_len;
+#else
     ics_rrule_t rrule;
+#endif
 
     bool has_exdate;
     bool has_rdate;
@@ -816,11 +836,14 @@ typedef struct {
     int64_t dur_days;  // whole days, all-day events
     bool all_day;
     bool utc;  // DTSTART in UTC: the instants are fixed, whatever the clocks do locally
+#if !FEATURE_AGENDA_RRULE
     int64_t period_days;
-    int64_t base_day;    // civil day of DTSTART (local series)
+    int64_t base_day;  // civil day of DTSTART (local series)
+#endif
     int hour, min, sec;  // wall-clock time of DTSTART (local series)
 } ics_series_t;
 
+#if !FEATURE_AGENDA_RRULE
 static time_t series_start(const ics_series_t *s, int64_t k)
 {
     if (k == 0) {
@@ -831,6 +854,7 @@ static time_t series_start(const ics_series_t *s, int64_t k)
     }
     return local_time_on_day(s->base_day + k * s->period_days, s->hour, s->min, s->sec);
 }
+#endif
 
 static time_t series_end(const ics_series_t *s, time_t occ_start)
 {
@@ -854,44 +878,137 @@ static void add_candidate(ics_ctx_t *ctx, time_t start)
     }
 }
 
-// Expands a series (an RRULE this parser understands, or a single event that has EXDATE/RDATE) into
-// whichever instances overlap [window_start, window_end), minus the excluded and replaced ones,
-// plus the RDATEs.
-//
-// A DTSTART in local time (a bare time or one with a TZID - both are read as the device's own time
-// zone, see calendar_ics.h) repeats on the wall clock: the n-th instance is DTSTART's time of day
-// on the n-th period's civil day. Adding n * 86400 s would drift an hour when the clocks change
-// (a series started in winter would show up an hour late in summer). A DTSTART in UTC repeats at
-// fixed instants, as the standard says. The first instance is found by jumping to the right period
-// rather than walking from DTSTART, which can be years in the past.
-static void expand_series(ics_ctx_t *ctx, const ics_vevent_state_t *st, const ics_rrule_t *rule,
-                          time_t start, time_t end, const char *summary, time_t window_start,
-                          time_t window_end, ics_event_list_t *out)
+#if FEATURE_AGENDA_RRULE
+// The wall-clock fields of an instant: in the device's time zone, or in UTC for a series in UTC.
+static void wall_of(time_t t, bool utc, rrule_wall_t *w)
 {
-    ics_series_t s;
-    memset(&s, 0, sizeof(s));
-    s.start = start;
-    s.duration = end > start ? end - start : 0;
-    s.all_day = st->all_day;
-    s.utc = st->dtstart_utc && !st->all_day;
-    s.period_days = (int64_t) (rule->weekly ? 7 : 1) * rule->interval;
-    if (s.period_days <= 0) {
-        s.period_days = 1;  // defensive - interval is already clamped >= 1 by parse_rrule()
+    struct tm tm;
+    if (utc) {
+        gmtime_r(&t, &tm);
+    } else {
+        localtime_r(&t, &tm);
     }
-    if (s.all_day) {
-        s.dur_days = ((int64_t) s.duration + 43200) / 86400;
-        if (s.dur_days < 1) {
-            s.dur_days = 1;
+    w->year = (int16_t) (tm.tm_year + 1900);
+    w->month = (int8_t) (tm.tm_mon + 1);
+    w->day = (int8_t) tm.tm_mday;
+    w->hour = (int8_t) tm.tm_hour;
+    w->minute = (int8_t) tm.tm_min;
+    w->second = (int8_t) tm.tm_sec;
+}
+
+static time_t instant_of(const rrule_wall_t *w, bool utc)
+{
+    if (utc) {
+        struct tm tm;
+        memset(&tm, 0, sizeof(tm));
+        tm.tm_year = w->year - 1900;
+        tm.tm_mon = w->month - 1;
+        tm.tm_mday = w->day;
+        tm.tm_hour = w->hour;
+        tm.tm_min = w->minute;
+        tm.tm_sec = w->second;
+        return ics_timegm(&tm);
+    }
+    return local_time_on_day(days_from_civil(w->year, w->month, w->day), w->hour, w->minute,
+                             w->second);
+}
+
+// The UNTIL of a rule as an instant (a bare date is a local midnight, a date-time is local or UTC
+// as written - as parse_rrule() reads it). 1: found, 0: none, -1: malformed.
+static int rule_until(const char *text, size_t len, time_t *until)
+{
+    size_t i = 0;
+    while (i < len) {
+        size_t s = i;
+        while (i < len && text[i] != ';') {
+            i++;
+        }
+        size_t part_len = i - s;
+        if (i < len) {
+            i++;
+        }
+        if (part_len >= 6 && strncasecmp(text + s, "UNTIL=", 6) == 0) {
+            struct tm tm;
+            bool all_day, utc;
+            if (!parse_ics_datetime(text + s + 6, part_len - 6, &tm, &all_day, &utc)) {
+                return -1;
+            }
+            *until = ics_datetime_to_time(&tm, utc);
+            return 1;
         }
     }
-    s.base_day = days_from_civil(st->dtstart_tm.tm_year + 1900, st->dtstart_tm.tm_mon + 1,
-                                 st->dtstart_tm.tm_mday);
-    s.hour = st->dtstart_tm.tm_hour;
-    s.min = st->dtstart_tm.tm_min;
-    s.sec = st->dtstart_tm.tm_sec;
+    return 0;
+}
 
-    // First period to look at. An instance that started before the window can still reach into it
-    // (an in-progress multi-day event), so back up by as many periods as the event is long.
+// The instances of the series from libical's iterator, into ctx->cand. False: the rule is not
+// taken.
+static bool gather_with_engine(ics_ctx_t *ctx, const ics_vevent_state_t *st, const ics_series_t *s,
+                               time_t window_start, time_t window_end)
+{
+    if (!st->rrule_text) {
+        return false;
+    }
+    time_t until = 0;
+    int has_until = rule_until(st->rrule_text, st->rrule_len, &until);
+    if (has_until < 0) {
+        return false;
+    }
+    // From the event's length (and a day) before the window to a day after it: an instance can
+    // start before the window and reach into it; the day on both sides covers what a time zone rule
+    // moves.
+    int64_t lead = (s->all_day ? s->dur_days * 86400 : (int64_t) s->duration) + 86400;
+    rrule_wall_t dtstart, from, to;
+    dtstart.year = (int16_t) (st->dtstart_tm.tm_year + 1900);
+    dtstart.month = (int8_t) (st->dtstart_tm.tm_mon + 1);
+    dtstart.day = (int8_t) st->dtstart_tm.tm_mday;
+    dtstart.hour = (int8_t) st->dtstart_tm.tm_hour;
+    dtstart.minute = (int8_t) st->dtstart_tm.tm_min;
+    dtstart.second = (int8_t) st->dtstart_tm.tm_sec;
+    wall_of(window_start - (time_t) lead, s->utc, &from);
+    wall_of(window_end + 86400, s->utc, &to);
+    int n = calendar_rrule_expand(st->rrule_text, st->rrule_len, &dtstart, s->all_day, &from, &to,
+                                  ctx->wall, ICS_MAX_CANDIDATES);
+    if (n < 0) {
+        ESP_LOGW(TAG, "Skipping a repeating event: its rule is not taken");
+        return false;
+    }
+    for (int i = 0; i < n; i++) {
+        time_t occ_start = instant_of(&ctx->wall[i], s->utc);
+        if (has_until && occ_start > until) {
+            break;  // UNTIL is inclusive (RFC 5545)
+        }
+        if (!time_overlaps_window(occ_start, series_end(s, occ_start), window_start, window_end)) {
+            continue;
+        }
+        if (!instance_hidden(ctx, st, occ_start, s->all_day)) {
+            add_candidate(ctx, occ_start);
+        }
+    }
+    return true;
+}
+
+// A single event that has an EXDATE or RDATE is a series of one: its own instance, which an
+// EXDATE can take away, into ctx->cand.
+static void gather_single(ics_ctx_t *ctx, const ics_vevent_state_t *st, const ics_series_t *s,
+                          time_t window_start, time_t window_end)
+{
+    if (time_overlaps_window(s->start, series_end(s, s->start), window_start, window_end) &&
+        !instance_hidden(ctx, st, s->start, s->all_day)) {
+        add_candidate(ctx, s->start);
+    }
+}
+#endif  // FEATURE_AGENDA_RRULE
+
+#if !FEATURE_AGENDA_RRULE
+// The instances of a rule that this parser's own expander understands (DAILY/WEEKLY), into
+// ctx->cand.
+static void gather_simple(ics_ctx_t *ctx, const ics_vevent_state_t *st, const ics_rrule_t *rule,
+                          const ics_series_t *series, time_t window_start, time_t window_end)
+{
+    const ics_series_t s = *series;
+    const time_t start = s.start;
+    // First period to look at. An instance that started before the window can still reach into
+    // it (an in-progress multi-day event), so back up by as many periods as the event is long.
     int64_t k0, back;
     if (s.utc) {
         int64_t period_secs = s.period_days * 86400;
@@ -906,8 +1023,8 @@ static void expand_series(ics_ctx_t *ctx, const ics_vevent_state_t *st, const ic
     }
     k0 = k0 > back ? k0 - back : 0;
 
-    // Hard safety cap, sized to the window (a flat number once truncated a 30-day expansion): the
-    // periods the window spans plus the backed-up ones, never more than 400 beyond those.
+    // Hard safety cap, sized to the window (a flat number once truncated a 30-day expansion):
+    // the periods the window spans plus the backed-up ones, never more than 400 beyond those.
     int64_t window_days = ((int64_t) window_end - (int64_t) window_start) / 86400 + 2;
     if (window_days < 0) {
         window_days = 0;
@@ -917,7 +1034,6 @@ static void expand_series(ics_ctx_t *ctx, const ics_vevent_state_t *st, const ic
         max_iterations = back + 400;
     }
 
-    ctx->n_cand = 0;
     for (int64_t k = k0; k < k0 + max_iterations; k++) {
         if (rule->has_count && k >= rule->count) {
             break;  // COUNT counts the instances the rule makes, excluded ones included
@@ -927,7 +1043,8 @@ static void expand_series(ics_ctx_t *ctx, const ics_vevent_state_t *st, const ic
             break;  // start only increases with k - nothing further can matter
         }
         if (rule->has_until && occ_start > rule->until) {
-            break;  // UNTIL is inclusive (RFC 5545) - past it, nothing further can matter either
+            break;  // UNTIL is inclusive (RFC 5545) - past it, nothing further can matter
+                    // either
         }
         if (!time_overlaps_window(occ_start, series_end(&s, occ_start), window_start, window_end)) {
             continue;
@@ -936,6 +1053,66 @@ static void expand_series(ics_ctx_t *ctx, const ics_vevent_state_t *st, const ic
             add_candidate(ctx, occ_start);
         }
     }
+}
+#endif  // !FEATURE_AGENDA_RRULE
+
+// Expands a series (an RRULE - the rules of libical's iterator with the option agenda-rrule, DAILY
+// and WEEKLY without it - or a single event that has EXDATE/RDATE) into
+// whichever instances overlap [window_start, window_end), minus the excluded and replaced ones,
+// plus the RDATEs.
+//
+// A DTSTART in local time (a bare time or one with a TZID - both are read as the device's own time
+// zone, see calendar_ics.h) repeats on the wall clock: the n-th instance is DTSTART's time of day
+// on the n-th period's civil day. Adding n * 86400 s would drift an hour when the clocks change
+// (a series started in winter would show up an hour late in summer). A DTSTART in UTC repeats at
+// fixed instants, as the standard says. The first instance is found by jumping to the right period
+// rather than walking from DTSTART, which can be years in the past.
+static void expand_series(ics_ctx_t *ctx, const ics_vevent_state_t *st,
+#if !FEATURE_AGENDA_RRULE
+                          const ics_rrule_t *rule,
+#endif
+                          time_t start, time_t end, const char *summary, time_t window_start,
+                          time_t window_end, ics_event_list_t *out)
+{
+    ics_series_t s;
+    memset(&s, 0, sizeof(s));
+    s.start = start;
+    s.duration = end > start ? end - start : 0;
+    s.all_day = st->all_day;
+    s.utc = st->dtstart_utc && !st->all_day;
+#if !FEATURE_AGENDA_RRULE
+    s.period_days = rule ? (int64_t) (rule->weekly ? 7 : 1) * rule->interval : 1;
+    if (s.period_days <= 0) {
+        s.period_days = 1;  // defensive - interval is already clamped >= 1 by parse_rrule()
+    }
+#endif
+    if (s.all_day) {
+        s.dur_days = ((int64_t) s.duration + 43200) / 86400;
+        if (s.dur_days < 1) {
+            s.dur_days = 1;
+        }
+    }
+#if !FEATURE_AGENDA_RRULE
+    s.base_day = days_from_civil(st->dtstart_tm.tm_year + 1900, st->dtstart_tm.tm_mon + 1,
+                                 st->dtstart_tm.tm_mday);
+#endif
+    s.hour = st->dtstart_tm.tm_hour;
+    s.min = st->dtstart_tm.tm_min;
+    s.sec = st->dtstart_tm.tm_sec;
+
+    ctx->n_cand = 0;
+#if FEATURE_AGENDA_RRULE
+    if (st->has_rrule) {
+        // libical's iterator makes the instances of the rule (calendar_rrule.c)
+        if (!gather_with_engine(ctx, st, &s, window_start, window_end)) {
+            return;  // a rule that is not taken: the event is left out
+        }
+    } else {
+        gather_single(ctx, st, &s, window_start, window_end);
+    }
+#else
+    gather_simple(ctx, st, rule, &s, window_start, window_end);
+#endif
 
     for (int i = 0; i < ctx->n_rdates; i++) {
         time_t occ_start = ctx->rdates[i].t;
@@ -1022,6 +1199,7 @@ static void finalize_vevent(ics_ctx_t *ctx, const ics_vevent_state_t *st, time_t
 
     // A series, or a single event that has an EXDATE/RDATE (one instance that can be excluded, plus
     // the RDATEs): the latter is a series of one.
+#if !FEATURE_AGENDA_RRULE
     ics_rrule_t single;
     memset(&single, 0, sizeof(single));
     single.supported = true;
@@ -1057,6 +1235,7 @@ static void finalize_vevent(ics_ctx_t *ctx, const ics_vevent_state_t *st, time_t
         }
         rule = &st->rrule;
     }
+#endif
 
     // Only exceptions that can touch the window are kept: an instance outside it is not shown
     // anyway.
@@ -1075,7 +1254,11 @@ static void finalize_vevent(ics_ctx_t *ctx, const ics_vevent_state_t *st, time_t
                  "is ignored",
                  ICS_MAX_EXDATES, ICS_MAX_RDATES);
     }
+#if FEATURE_AGENDA_RRULE
+    expand_series(ctx, st, start, end, summary, window_start, window_end, out);
+#else
     expand_series(ctx, st, rule, start, end, summary, window_start, window_end, out);
+#endif
 }
 
 static int compare_events_by_start(const void *a, const void *b)
@@ -1223,7 +1406,14 @@ esp_err_t calendar_ics_parse(char *body, size_t body_len, time_t window_start, t
             st.have_summary = true;
         } else if (name_is(name, name_len, "RRULE")) {
             st.has_rrule = true;
+#if FEATURE_AGENDA_RRULE
+            // the engine (calendar_rrule.c) wants the text; a line that was cut at the buffer is
+            // not one
+            st.rrule_text = (size_t) (line_end - line) <= ICS_LINE_MAX_LEN ? value : NULL;
+            st.rrule_len = value_len;
+#else
             parse_rrule(value, value_len, &st.rrule);  // rrule.supported tells finalize_vevent()
+#endif
         } else if (name_is(name, name_len, "EXDATE")) {
             st.has_exdate = true;
         } else if (name_is(name, name_len, "RDATE")) {
@@ -1284,6 +1474,60 @@ static char *read_whole_file(const char *path, size_t *out_len)
     return buf;
 }
 
+#if FEATURE_WEBCAL
+const char *calendar_ics_resolve_url(const char *url, char *buf, size_t buf_len)
+{
+    static const char webcals[] = "webcals://";
+    static const char webcal[] = "webcal://";
+    size_t prefix = 0;
+    if (strncasecmp(url, webcals, sizeof(webcals) - 1) == 0) {
+        prefix = sizeof(webcals) - 1;
+    } else if (strncasecmp(url, webcal, sizeof(webcal) - 1) == 0) {
+        prefix = sizeof(webcal) - 1;
+    }
+    if (prefix == 0) {
+        return url;
+    }
+    int n = snprintf(buf, buf_len, "https://%s", url + prefix);
+    return (n < 0 || (size_t) n >= buf_len) ? NULL : buf;
+}
+#endif
+
+#if FEATURE_CALDAV
+// The one-shot sources (Calendar C-E) have no window of their own: from last week to a year ahead.
+#define CALDAV_ONCE_PAST_S (7 * 24 * 3600)
+#define CALDAV_ONCE_AHEAD_S (366 * 24 * 3600)
+
+// Asks the CalDAV server for the events between `start` and `end` (see caldav.h) and returns
+// their iCalendar text in *out_body (free with free()). The first request asks the server to
+// expand repeating events; a server that refuses the query for that (400, 415, 422, 501) is asked
+// again without - the parser then expands what it knows itself.
+static esp_err_t caldav_query(const char *url, int timeout_ms, time_t start, time_t end,
+                              char **out_body, size_t *out_len)
+{
+    char with_expand[CALDAV_REPORT_BODY_MAX], without_expand[CALDAV_REPORT_BODY_MAX];
+    if (caldav_build_report_body(with_expand, sizeof(with_expand), start, end, true) < 0 ||
+        caldav_build_report_body(without_expand, sizeof(without_expand), start, end, false) < 0) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    return caldav_report_text(url, timeout_ms > 0 ? timeout_ms : ICS_HTTP_TIMEOUT_MS,
+                              ICS_MAX_RESPONSE_BYTES, with_expand, without_expand, out_body,
+                              out_len);
+}
+
+static bool write_cache_file(const char *path, const char *data, size_t len)
+{
+    FILE *fp = fopen(path, "wb");
+    if (!fp) {
+        ESP_LOGW(TAG, "Could not write Calendar cache file");
+        return false;
+    }
+    fwrite(data, 1, len, fp);
+    fclose(fp);
+    return true;
+}
+#endif
+
 esp_err_t calendar_ics_fetch(const char *url, int timeout_ms, time_t window_start,
                              time_t window_end, const char *cache_path, const char *etag_in,
                              char *etag_out, size_t etag_out_len, ics_event_list_t *out)
@@ -1298,6 +1542,37 @@ esp_err_t calendar_ics_fetch(const char *url, int timeout_ms, time_t window_star
     if (!url || url[0] == '\0') {
         return ESP_ERR_INVALID_ARG;
     }
+#if FEATURE_CALDAV
+    if (caldav_is_url(url)) {
+        // No ETag with a REPORT: what comes back is the window, and it is fetched every time.
+        char *ics = NULL;
+        size_t ics_len = 0;
+        esp_err_t query_err =
+            caldav_query(url, timeout_ms, window_start, window_end, &ics, &ics_len);
+        if (query_err != ESP_OK) {
+            return query_err;
+        }
+        if (cache_path) {
+            write_cache_file(cache_path, ics, ics_len);
+        }
+        if (ics_len == 0) {
+            // A window with no events at all is a valid answer, not a parse error.
+            free(ics);
+            return ESP_OK;
+        }
+        query_err = calendar_ics_parse(ics, ics_len, window_start, window_end, out);
+        free(ics);
+        return query_err;
+    }
+#endif
+#if FEATURE_WEBCAL
+    char resolved_url[ICS_URL_MAX_LEN];
+    url = calendar_ics_resolve_url(url, resolved_url, sizeof(resolved_url));
+    if (!url) {
+        ESP_LOGW(TAG, "Calendar URL is too long");
+        return ESP_ERR_INVALID_ARG;
+    }
+#endif
 
     char *body = NULL;
     size_t body_len = 0;
@@ -1355,6 +1630,29 @@ esp_err_t calendar_ics_fetch_once(const char *url, int timeout_ms, const char *c
     if (!url || url[0] == '\0' || !cache_path) {
         return ESP_ERR_INVALID_ARG;
     }
+#if FEATURE_CALDAV
+    if (caldav_is_url(url)) {
+        time_t now = time(NULL);
+        char *ics = NULL;
+        size_t ics_len = 0;
+        esp_err_t query_err = caldav_query(url, timeout_ms, now - CALDAV_ONCE_PAST_S,
+                                           now + CALDAV_ONCE_AHEAD_S, &ics, &ics_len);
+        if (query_err != ESP_OK) {
+            return query_err;
+        }
+        bool written = write_cache_file(cache_path, ics, ics_len);
+        free(ics);
+        return written ? ESP_OK : ESP_FAIL;
+    }
+#endif
+#if FEATURE_WEBCAL
+    char resolved_url[ICS_URL_MAX_LEN];
+    url = calendar_ics_resolve_url(url, resolved_url, sizeof(resolved_url));
+    if (!url) {
+        ESP_LOGW(TAG, "Calendar URL is too long");
+        return ESP_ERR_INVALID_ARG;
+    }
+#endif
 
     char *body = NULL;
     size_t body_len = 0;

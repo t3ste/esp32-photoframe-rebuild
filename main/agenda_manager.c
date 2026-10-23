@@ -1,4 +1,11 @@
 #include "agenda_manager.h"
+#if FEATURE_INFO_SCREENS
+#include "info_screens.h"
+#include "info_screens_core.h"
+#endif
+#if FEATURE_SCHEDULE_PAGES
+#include "sched_pick.h"
+#endif
 
 #include <math.h>
 #include <stdio.h>
@@ -184,16 +191,149 @@ static bool load_extra_ics_source(bool enabled, const char *raw_cache_path,
     return true;
 }
 
+#if FEATURE_SCHEDULE_PAGES
+// The agenda schedules as the entries of sched_pick.h, in the order of the settings (a schedule's
+// position is its priority; rules that cannot be read are left out), and the photo rotation as the
+// last one when it has rules. The hold of a schedule is its own or else the common gap.
+typedef struct {
+    cron_rule_t agenda_rules[MAX_CRON_RULES];
+    cron_rule_t rotation_rules[MAX_CRON_RULES];
+    sched_entity_t entities[SCHED_MAX_ENTITIES];
+    int stored_index[SCHED_MAX_ENTITIES];  // entity -> the schedule's index in the settings
+    int agenda_count;                      // entities that are agenda schedules
+    int count;                             // all entities
+    int rotation_index;                    // -1: the rotation does not take part
+} sched_view_t;
+
+static void sched_view_build(sched_view_t *view)
+{
+    memset(view, 0, sizeof(*view));
+    view->rotation_index = -1;
+    int gap = config_manager_get_sched_gap();
+    int stored = config_manager_get_agenda_cron_rule_count();
+    for (int i = 0; i < stored && view->agenda_count < MAX_CRON_RULES; i++) {
+        const char *text = config_manager_get_agenda_cron_rule(i);
+        if (!text || !cron_parse(text, &view->agenda_rules[view->agenda_count])) {
+            continue;
+        }
+        int hold = config_manager_get_sched_hold(i);
+        view->entities[view->agenda_count].rules = &view->agenda_rules[view->agenda_count];
+        view->entities[view->agenda_count].n_rules = 1;
+        view->entities[view->agenda_count].hold_min = hold > 0 ? hold : gap;
+        view->stored_index[view->agenda_count] = i;
+        view->agenda_count++;
+    }
+    view->count = view->agenda_count;
+    int rotation_rules =
+        config_manager_get_compiled_cron_rules(view->rotation_rules, MAX_CRON_RULES);
+    if (rotation_rules > 0 && view->count < SCHED_MAX_ENTITIES) {
+        view->rotation_index = view->count;
+        view->entities[view->count].rules = view->rotation_rules;
+        view->entities[view->count].n_rules = rotation_rules;
+        view->entities[view->count].hold_min = gap;
+        view->stored_index[view->count] = -1;
+        view->count++;
+    }
+}
+
+// The schedule (index in the settings) that drew at the last agenda wake decision, and its minute
+static int sched_last_winner = -1;
+static time_t sched_last_minute = 0;
+
+// The schedule that draws in the minute of `now` or, if the clock has just passed into the next
+// minute while the screen was prepared, in the one before. -1 when there is none.
+static int sched_winner_for_run(void)
+{
+    time_t now = time(NULL);
+    if (sched_last_minute != 0 && now - sched_last_minute < 120 && sched_last_winner >= 0) {
+        return sched_last_winner;
+    }
+    sched_view_t view;
+    sched_view_build(&view);
+    for (int back = 0; back <= 1; back++) {
+        int k = sched_drawn_at(view.entities, view.agenda_count, now - back * 60);
+        if (k >= 0) {
+            return view.stored_index[k];
+        }
+    }
+    return -1;
+}
+
+int agenda_manager_rotation_seconds_until_next(void)
+{
+    if (!config_manager_sched_pages_in_use()) {
+        return -1;
+    }
+    sched_view_t view;
+    sched_view_build(&view);
+    if (view.rotation_index < 0) {
+        return -1;
+    }
+    return sched_seconds_until_next_of(view.entities, view.count, time(NULL), view.rotation_index);
+}
+#endif
+
+#if FEATURE_SCHEDULE_PAGES
+// Whether any schedule's own pages would actually draw something right now: compiled in,
+// currently ticked under Information screens, and - for a schedule only given the Agenda page -
+// only while there is something for it to show. config_manager_sched_pages_in_use() alone only
+// knows that a schedule was *given* pages at some point, which can be stale (a page since
+// unticked, or the only given page being a content-less Agenda); waking the frame for that finds
+// nothing to draw (info_screens_next_for() falls back to the shared rotation, and that, failing
+// too, is the "nothing to render this agenda cycle" case below) - a real cost on a battery frame.
+static bool sched_pages_effective(bool agenda_has_content)
+{
+    uint32_t compiled = info_screens_compiled_mask();
+    uint32_t ticked = config_manager_get_info_screens_mask();
+    int count = config_manager_get_agenda_cron_rule_count();
+    for (int i = 0; i < count && i < MAX_CRON_RULES; i++) {
+        uint32_t mask = info_screens_effective_mask(config_manager_get_sched_mask(i), compiled,
+                                                    ticked, agenda_has_content, INFO_SCREEN_AGENDA);
+        if (mask != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+#endif
+
 bool agenda_manager_is_enabled(void)
 {
+#if FEATURE_INFO_SCREENS
+    bool agenda_has_content =
+        config_manager_get_agenda_todo_enabled() || config_manager_get_agenda_cal_enabled();
+    // an information screen in the rotation keeps the schedule going without ToDo or calendars
+    if (!agenda_has_content && !info_screens_extra_enabled()
+#if FEATURE_SCHEDULE_PAGES
+        && !sched_pages_effective(agenda_has_content)
+#endif
+    ) {
+        return false;
+    }
+#else
     if (!config_manager_get_agenda_todo_enabled() && !config_manager_get_agenda_cal_enabled()) {
         return false;
     }
+#endif
     return config_manager_get_agenda_cron_rule_count() > 0;
 }
 
 bool agenda_manager_wake_matches_now(void)
 {
+#if FEATURE_SCHEDULE_PAGES
+    if (config_manager_sched_pages_in_use()) {
+        // pages are assigned: the schedules overlap by priority, and only a fire that is drawn
+        // counts
+        sched_view_t view;
+        sched_view_build(&view);
+        // A wake a few seconds before its minute counts as that minute (see wake_minute.h)
+        time_t now = wake_minute_clock(time(NULL), EARLY_WAKE_TOLERANCE_SEC);
+        int k = sched_drawn_at(view.entities, view.agenda_count, now);
+        sched_last_winner = k >= 0 ? view.stored_index[k] : -1;
+        sched_last_minute = now;
+        return k >= 0;
+    }
+#endif
     cron_rule_t rules[MAX_CRON_RULES];
     int n = config_manager_get_compiled_agenda_cron_rules(rules, MAX_CRON_RULES);
     if (n == 0) {
@@ -215,6 +355,15 @@ bool agenda_manager_wake_matches_now(void)
 
 int agenda_manager_seconds_until_next_wake(void)
 {
+#if FEATURE_SCHEDULE_PAGES
+    if (config_manager_sched_pages_in_use()) {
+        sched_view_t view;
+        sched_view_build(&view);
+        if (view.agenda_count > 0) {
+            return sched_seconds_until_next(view.entities, view.agenda_count, time(NULL), NULL);
+        }
+    }
+#endif
     cron_rule_t rules[MAX_CRON_RULES];
     int n = config_manager_get_compiled_agenda_cron_rules(rules, MAX_CRON_RULES);
     if (n == 0) {
@@ -231,6 +380,39 @@ int agenda_manager_seconds_until_next_wake(void)
 
 esp_err_t agenda_manager_run(bool wifi_connected)
 {
+#if FEATURE_INFO_SCREENS
+    // The schedule is shared with the information screens: this run draws the next screen of the
+    // rotation, which is the agenda itself unless an information screen is due.
+    bool agenda_has_content =
+        config_manager_get_agenda_todo_enabled() || config_manager_get_agenda_cal_enabled();
+#if FEATURE_SCHEDULE_PAGES
+    int screen = -1;
+    if (config_manager_sched_pages_in_use()) {
+        int schedule = sched_winner_for_run();
+        uint32_t mask = schedule >= 0 ? config_manager_get_sched_mask(schedule) : 0;
+        if (mask != 0) {
+            screen = info_screens_next_for(mask, schedule, agenda_has_content);
+            if (screen >= 0) {
+                ESP_LOGI(TAG, "Schedule %d draws the %s page", schedule + 1,
+                         info_screen_name(screen));
+            } else {
+                ESP_LOGI(TAG,
+                         "Schedule %d's pages are all unavailable right now - the shared rotation "
+                         "draws instead",
+                         schedule + 1);
+            }
+        }
+    }
+    if (screen < 0) {
+        screen = info_screens_next(agenda_has_content);  // not assigned: the shared rotation
+    }
+#else
+    int screen = info_screens_next(agenda_has_content);
+#endif
+    if (screen != INFO_SCREEN_AGENDA) {
+        return info_screens_show(screen, wifi_connected);
+    }
+#endif
     if (!wifi_connected) {
         ESP_LOGW(TAG,
                  "WiFi not connected this wake - skipping Calendar A/B, ToDo, and weather "

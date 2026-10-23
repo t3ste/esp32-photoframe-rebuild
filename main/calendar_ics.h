@@ -6,6 +6,7 @@
 #include <time.h>
 
 #include "esp_err.h"
+#include "feature_config.h"
 
 // 48 (was 24): the Agenda 7-day grid layout can touch a full week across up
 // to 5 calendar sources - 24 was already borderline for a busy calendar
@@ -33,7 +34,8 @@ typedef struct {
  * extracts non-recurring VEVENTs overlapping [window_start, window_end).
  *
  * Recurring events (a VEVENT with an RRULE) are expanded for DAILY/WEEKLY
- * rules - see calendar_ics.c's RRULE-lite - on the wall clock of the device's
+ * rules - see calendar_ics.c's RRULE-lite; with the build option agenda-rrule for
+ * every rule of RFC 5545 through libical, see calendar_rrule.h - on the wall clock of the device's
  * time zone, so a series keeps its time of day when the clocks change.
  * EXDATE, RDATE, RECURRENCE-ID (a moved or called-off instance; with
  * RANGE=THISANDFUTURE the later instances are left out) and STATUS:CANCELLED
@@ -132,5 +134,26 @@ esp_err_t calendar_ics_read_expanded_cache(const char *path, ics_event_list_t *o
  * so need to flag when they've run dry.
  */
 bool calendar_ics_has_upcoming_event(const ics_event_list_t *list, time_t now);
+
+#if FEATURE_WEBCAL || FEATURE_CALDAV
+// Longest URL calendar_ics_resolve_url() / caldav_resolve_url() can hand back (the config stores
+// at most 256).
+#define ICS_URL_MAX_LEN 300
+#endif
+
+#if FEATURE_WEBCAL
+/**
+ * @brief Turns a webcal:// or webcals:// subscription link (what calendar apps
+ * hand out for "subscribe") into the https:// URL it stands for; the scheme is
+ * matched case-insensitively. Any other URL is returned unchanged.
+ *
+ * @param url URL as saved (never NULL).
+ * @param buf Scratch space for the rewritten URL.
+ * @param buf_len Size of `buf`.
+ * @return `url` itself if it is not a webcal link, `buf` if it was rewritten,
+ * NULL if `buf` is too small for the rewritten URL.
+ */
+const char *calendar_ics_resolve_url(const char *url, char *buf, size_t buf_len);
+#endif
 
 #endif

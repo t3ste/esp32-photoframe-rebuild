@@ -4,6 +4,16 @@ import { useAppStore, useSettingsStore } from "../stores";
 import ImageProcessing from "./ImageProcessing.vue";
 import ProcessingControls from "./ProcessingControls.vue";
 import { wideEdit } from "../utils/uiPrefs";
+// #if FEATURE_MULTI_UPLOAD
+import {
+  BATCH_MAX_FILES,
+  batchSummary,
+  epdgzExpectedSize,
+  fitsPanel,
+  gunzippedSize,
+  uploadBaseName,
+} from "../utils/multiUpload";
+// #endif
 
 const appStore = useAppStore();
 const settingsStore = useSettingsStore();
@@ -39,6 +49,18 @@ const showPreview = ref(false);
 const processedResult = ref(null);
 const sourceCanvas = ref(null);
 const imageProcessingRef = ref(null);
+// #if FEATURE_MULTI_UPLOAD
+
+// Batch upload (several files at once): the queue the panel shows, and what the
+// per-file upload leaves behind for the batch loop to read.
+const batchState = ref(null); // { files, items: [{ name, status, note }], phase, cancel }
+const batchActive = ref(false); // true while a batch uploads (no per-file UI work then)
+const batchScaleMode = ref("cover");
+const batchPrerendered = ref(false); // upload PNG files as they are (already rendered)
+let lastUploadOk = false;
+let lastUploadStatus = 0;
+let lastUploadError = "";
+// #endif
 
 // Display dimensions
 // Display dimensions
@@ -83,6 +105,13 @@ function triggerFileSelect() {
 async function onFileSelected(event) {
   const file = event.target.files?.[0];
   if (!file) return;
+  // #if FEATURE_MULTI_UPLOAD
+  const chosen = Array.from(event.target.files);
+  if (chosen.length > 1) {
+    startBatch(chosen);
+    return;
+  }
+  // #endif
   await processFile(file);
 }
 
@@ -114,7 +143,68 @@ function loadImage(file) {
   });
 }
 
+// #if FEATURE_UPLOAD_DEDUP
+
+// Duplicate detection: the frame refuses an image its album already has (HTTP 409, naming the
+// file). A single upload then keeps its preview open and offers "Upload anyway"; in the "warn"
+// setting the image is stored and the reply says what it duplicates.
+const duplicateExisting = ref(""); // the file a refused upload duplicates, "" if none
+const allowDuplicates = ref(false); // upload even if the album has it (retry, batch option)
+let lastDuplicateOf = ""; // what the last upload was refused for
+let lastDuplicateStored = ""; // what the last (stored) upload duplicates
+// #if FEATURE_MULTI_UPLOAD
+const quietUpload = () => batchActive.value; // a batch reports per file in its own list
+// #else
+const quietUpload = () => false;
+// #endif
+
+async function noteDuplicate(response) {
+  lastDuplicateOf = "";
+  lastDuplicateStored = "";
+  duplicateExisting.value = "";
+  let body = {};
+  try {
+    body = await response.clone().json();
+  } catch (_error) {
+    // not JSON: an error page
+  }
+  if (response.status === 409 && body.status === "duplicate") {
+    lastDuplicateOf = body.existing || "an existing file";
+  } else if (response.ok && body.duplicate_of) {
+    lastDuplicateStored = body.duplicate_of;
+  }
+  if (quietUpload()) return;
+  if (lastDuplicateOf) {
+    duplicateExisting.value = lastDuplicateOf;
+  } else if (lastDuplicateStored) {
+    showMessage(
+      `Uploaded - the album already had the same image (${lastDuplicateStored})`,
+      "warning"
+    );
+  }
+}
+
+async function uploadAnyway() {
+  duplicateExisting.value = "";
+  allowDuplicates.value = true;
+  try {
+    await uploadImage("upload");
+  } finally {
+    allowDuplicates.value = false;
+  }
+}
+// #endif
+
 async function uploadImage(mode = "upload") {
+  // #if FEATURE_MULTI_UPLOAD
+  lastUploadOk = false;
+  lastUploadStatus = 0;
+  lastUploadError = "";
+  // #endif
+  // #if FEATURE_UPLOAD_DEDUP
+  lastDuplicateOf = "";
+  lastDuplicateStored = "";
+  // #endif
   if (!selectedFile.value || !sourceCanvas.value || !imageProcessor) return;
 
   uploading.value = true;
@@ -165,7 +255,12 @@ async function uploadImage(mode = "upload") {
 
     // Get scale mode and params from the preview component
     // Vue auto-unwraps refs from defineExpose, so no .value needed
+    // #if FEATURE_MULTI_UPLOAD
+    const scaleMode =
+      imageProcessingRef.value?.scaleMode || (batchActive.value ? batchScaleMode.value : "cover");
+    // #else
     const scaleMode = imageProcessingRef.value?.scaleMode || "cover";
+    // #endif
     const uploadParams = imageProcessingRef.value?.getUploadParams() || {};
 
     // Process image with theoretical palette for device at native dimensions.
@@ -254,16 +349,45 @@ async function uploadImage(mode = "upload") {
     // If mode is 'display' or SD card not available, use display-image endpoint
     const isDirectDisplay = mode === "display" || !canSaveToAlbum.value;
 
+    // #if FEATURE_UPLOAD_DEDUP
+    const uploadUrl = isDirectDisplay
+      ? "/api/display-image"
+      : `/api/upload?album=${encodeURIComponent(appStore.selectedAlbum)}${
+          allowDuplicates.value ? "&duplicates=allow" : ""
+        }`;
+    // #else
     const uploadUrl = isDirectDisplay
       ? "/api/display-image"
       : `/api/upload?album=${encodeURIComponent(appStore.selectedAlbum)}`;
+    // #endif
 
     const response = await fetch(uploadUrl, {
       method: "POST",
       body: formData,
     });
+    // #if FEATURE_MULTI_UPLOAD
+    lastUploadStatus = response.status;
+    // #endif
+    // #if FEATURE_UPLOAD_DEDUP
+    await noteDuplicate(response);
+    // #endif
 
     if (response.ok) {
+      // #if FEATURE_MULTI_UPLOAD
+      lastUploadOk = true;
+      // A batch reloads the album once, when it is finished.
+      if (!batchActive.value) {
+        await appStore.loadSystemInfo();
+
+        if (!isDirectDisplay && canSaveToAlbum.value) {
+          await appStore.loadImages(appStore.selectedAlbum);
+        }
+
+        if (!(canSaveToAlbum.value && mode === "display")) {
+          resetUpload();
+        }
+      }
+      // #else
       // Reload system info to update storage numbers whether in display or album mode
       await appStore.loadSystemInfo();
 
@@ -276,15 +400,22 @@ async function uploadImage(mode = "upload") {
       if (!(canSaveToAlbum.value && mode === "display")) {
         resetUpload();
       }
+      // #endif
     }
   } catch (error) {
     console.error("Upload failed:", error);
+    // #if FEATURE_MULTI_UPLOAD
+    lastUploadError = error?.message || String(error);
+    // #endif
   } finally {
     uploading.value = false;
   }
 }
 
 function resetUpload() {
+  // #if FEATURE_UPLOAD_DEDUP
+  duplicateExisting.value = "";
+  // #endif
   selectedFile.value = null;
   previewUrl.value = null;
   showPreview.value = false;
@@ -295,6 +426,195 @@ function resetUpload() {
   // Switch back to general tab after upload/cancel
   settingsStore.activeSettingsTab = "general";
 }
+// #if FEATURE_MULTI_UPLOAD
+
+// ---- Batch upload (several files at once) ----------------------------------------
+const batchDone = computed(() => batchSummary(batchState.value?.items ?? []).done);
+const batchFailed = computed(() => batchSummary(batchState.value?.items ?? []).failed);
+const batchPercent = computed(() => batchSummary(batchState.value?.items ?? []).percent);
+
+function batchIcon(status) {
+  return (
+    {
+      waiting: "mdi-clock-outline",
+      working: "mdi-progress-upload",
+      done: "mdi-check-circle",
+      failed: "mdi-alert-circle",
+      skipped: "mdi-minus-circle-outline",
+    }[status] || "mdi-help-circle-outline"
+  );
+}
+
+function batchColor(status) {
+  return { working: "primary", done: "success", failed: "error" }[status] || "grey";
+}
+
+// Shows the queue with its options; nothing is uploaded until the user starts it.
+function startBatch(files) {
+  if (batchState.value?.phase === "running") return;
+  if (!canSaveToAlbum.value) {
+    showMessage("Uploading several images needs storage (an SD card or internal flash).", "error");
+    return;
+  }
+  if (files.length > BATCH_MAX_FILES) {
+    showMessage(`Select at most ${BATCH_MAX_FILES} files at a time.`, "error");
+    return;
+  }
+  batchState.value = {
+    files,
+    items: files.map((f) => ({ name: f.name, status: "waiting", note: "" })),
+    phase: "ready",
+    cancel: false,
+  };
+  if (fileInput.value) {
+    fileInput.value.value = "";
+  }
+}
+
+// A file already rendered for a panel (EPDGZ from process-cli, or a panel-sized PNG when
+// the option is on) goes up as it is. Returns false if it turned out to be an ordinary
+// photo after all (PNG of another size), which the caller then converts.
+async function uploadPrerendered(file, item, kind) {
+  const width = displayWidth.value;
+  const height = displayHeight.value;
+  let thumbnailBlob = null;
+  if (kind === "epdgz") {
+    let size;
+    try {
+      size = await gunzippedSize(file);
+    } catch (_error) {
+      throw new Error("not a valid EPDGZ file");
+    }
+    const expected = epdgzExpectedSize(width, height);
+    if (size !== null && size !== expected) {
+      throw new Error(`not rendered for this ${width}x${height} panel (${size} bytes)`);
+    }
+  } else {
+    const bitmap = await createImageBitmap(file);
+    if (!fitsPanel(bitmap.width, bitmap.height, width, height)) {
+      bitmap.close();
+      return false;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    canvas.getContext("2d").drawImage(bitmap, 0, 0);
+    bitmap.close();
+    const thumbCanvas = imageProcessor.generateThumbnail(canvas, THUMBNAIL_MAX_DIM);
+    thumbnailBlob = await new Promise((resolve) => {
+      thumbCanvas.toBlob(resolve, "image/jpeg", 0.85);
+    });
+  }
+  // The user's own file name is kept (the same name replaces the earlier upload).
+  const base = uploadBaseName(file.name);
+  const formData = new FormData();
+  formData.append("image", file, `${base}.${kind}`);
+  if (thumbnailBlob) {
+    formData.append("thumbnail", thumbnailBlob, `${base}.jpg`);
+  }
+  // #if FEATURE_UPLOAD_DEDUP
+  const uploadUrl = `/api/upload?album=${encodeURIComponent(appStore.selectedAlbum)}${
+    allowDuplicates.value ? "&duplicates=allow" : ""
+  }`;
+  // #else
+  const uploadUrl = `/api/upload?album=${encodeURIComponent(appStore.selectedAlbum)}`;
+  // #endif
+  const response = await fetch(uploadUrl, {
+    method: "POST",
+    body: formData,
+  });
+  // #if FEATURE_UPLOAD_DEDUP
+  await noteDuplicate(response);
+  if (lastDuplicateOf) {
+    item.status = "skipped";
+    item.note = `already in the album (${lastDuplicateOf})`;
+    return true;
+  }
+  // #endif
+  if (!response.ok) {
+    throw new Error(`upload failed (HTTP ${response.status})`);
+  }
+  item.status = "done";
+  item.note = "uploaded as it is";
+  return true;
+}
+
+// One file of the batch: pre-rendered as it is, otherwise converted with the current
+// processing settings exactly like a single upload (cover or fit, no editor).
+async function uploadBatchFile(file, item) {
+  const name = file.name.toLowerCase();
+  if (name.endsWith(".epdgz")) {
+    await uploadPrerendered(file, item, "epdgz");
+    return;
+  }
+  if (name.endsWith(".png") && batchPrerendered.value) {
+    if (await uploadPrerendered(file, item, "png")) return;
+  }
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch (_error) {
+    throw new Error("cannot be read as an image");
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  canvas.getContext("2d").drawImage(bitmap, 0, 0);
+  bitmap.close();
+  selectedFile.value = file;
+  sourceCanvas.value = canvas;
+  await uploadImage("upload");
+  // #if FEATURE_UPLOAD_DEDUP
+  if (lastDuplicateOf) {
+    item.status = "skipped";
+    item.note = `already in the album (${lastDuplicateOf})`;
+    return;
+  }
+  // #endif
+  if (!lastUploadOk) {
+    throw new Error(
+      lastUploadStatus ? `upload failed (HTTP ${lastUploadStatus})` : lastUploadError || "failed"
+    );
+  }
+  item.status = "done";
+}
+
+async function uploadBatch() {
+  const state = batchState.value;
+  if (!state || state.phase !== "ready" || !imageProcessor) return;
+  state.phase = "running";
+  batchActive.value = true;
+  try {
+    for (let i = 0; i < state.files.length; i++) {
+      const item = state.items[i];
+      if (state.cancel) {
+        item.status = "skipped";
+        item.note = "stopped";
+        continue;
+      }
+      item.status = "working";
+      try {
+        await uploadBatchFile(state.files[i], item);
+      } catch (error) {
+        item.status = "failed";
+        item.note = error.message || String(error);
+      }
+    }
+  } finally {
+    batchActive.value = false;
+    state.phase = "done";
+    selectedFile.value = null;
+    sourceCanvas.value = null;
+  }
+  await appStore.loadSystemInfo();
+  await appStore.loadImages(appStore.selectedAlbum);
+  const failed = batchFailed.value;
+  showMessage(
+    `${batchDone.value} uploaded${failed ? `, ${failed} failed` : ""}`,
+    failed ? "warning" : "success"
+  );
+}
+// #endif
 
 // AI Generation Logic
 const showAiDialog = ref(false);
@@ -365,7 +685,13 @@ const snackbarColor = ref("info");
 // The chosen file could not be read as an image (damaged, or a format this browser cannot decode):
 // say so and drop it, instead of a blank preview with buttons that do nothing.
 function onImageUnreadable() {
-  showMessage("This file could not be read as an image", "error");
+  const name = selectedFile.value?.name ?? "";
+  showMessage(
+    /\.hei[cf]$/i.test(name)
+      ? "This browser cannot read HEIC photos; export it as JPEG, or use Safari"
+      : "This file could not be read as an image",
+    "error"
+  );
   resetUpload();
 }
 
@@ -574,13 +900,24 @@ async function generateAiImage() {
 
     <v-card-text>
       <!-- Hidden file input -->
+      <!-- #if FEATURE_MULTI_UPLOAD -->
       <input
         ref="fileInput"
         type="file"
-        accept=".jpg,.jpeg,.png,.heic,.heif,.webp,.gif,.bmp"
+        accept="#if FORK_FIXES .jpg,.jpeg,.png,.webp,.gif,.bmp,.epdgz,image/* #else .jpg,.jpeg,.png,.webp,.gif,.bmp #endif"
+        multiple
         style="display: none"
         @change="onFileSelected"
       />
+      <!-- #else -->
+      <input
+        ref="fileInput"
+        type="file"
+        accept="#if FORK_FIXES image/* #else .jpg,.jpeg,.png,.gif,.bmp #endif"
+        style="display: none"
+        @change="onFileSelected"
+      />
+      <!-- #endif -->
 
       <!-- Upload Area -->
       <v-sheet
@@ -593,8 +930,19 @@ async function generateAiImage() {
         @drop.prevent="onFileSelected({ target: { files: $event.dataTransfer.files } })"
       >
         <v-icon icon="mdi-cloud-upload" size="64" color="grey" />
+        <!-- #if FEATURE_MULTI_UPLOAD -->
+        <p class="text-h6 mt-4">Click or drag images to upload</p>
+        <p class="text-body-2 text-grey">
+          Supports: JPG, PNG, WebP, GIF, BMP #if FORK_FIXES ; HEIC only in Safari #endif - select
+          several files to upload them in one go, or EPDGZ files rendered for this panel (for
+          instance with process-cli)
+        </p>
+        <!-- #else -->
         <p class="text-h6 mt-4">Click or drag image to upload</p>
-        <p class="text-body-2 text-grey">Supports: JPG, PNG, HEIC, WebP, GIF, BMP</p>
+        <p class="text-body-2 text-grey">
+          Supports: JPG, PNG, WebP, GIF, BMP #if FORK_FIXES ; HEIC only in Safari #endif
+        </p>
+        <!-- #endif -->
         <div class="my-3 d-flex align-center" style="width: 100%">
           <v-divider />
           <span class="mx-2 text-grey text-caption">OR</span>
@@ -606,6 +954,94 @@ async function generateAiImage() {
         </v-btn>
       </v-sheet>
 
+      <!-- #if FEATURE_MULTI_UPLOAD -->
+      <!-- Batch upload queue -->
+      <div v-if="batchState">
+        <div class="text-subtitle-1 mb-2">
+          {{ batchState.items.length }} files
+          <span v-if="batchState.phase !== 'ready'">
+            - {{ batchDone }} done<span v-if="batchFailed">, {{ batchFailed }} failed</span>
+          </span>
+        </div>
+        <v-progress-linear
+          v-if="batchState.phase !== 'ready'"
+          :model-value="batchPercent"
+          height="8"
+          rounded
+          class="mb-3"
+        />
+        <div v-if="batchState.phase === 'ready'" class="d-flex flex-wrap align-center mb-3">
+          <v-select
+            v-model="appStore.selectedAlbum"
+            :items="appStore.sortedAlbums.map((a) => a.name)"
+            label="Album"
+            variant="outlined"
+            density="compact"
+            hide-details
+            style="max-width: 200px"
+            class="mr-3 mb-2"
+          />
+          <v-select
+            v-model="batchScaleMode"
+            :items="[
+              { title: 'Cover (crop to fill)', value: 'cover' },
+              { title: 'Fit (letterbox)', value: 'fit' },
+            ]"
+            label="Photos"
+            variant="outlined"
+            density="compact"
+            hide-details
+            style="max-width: 220px"
+            class="mr-3 mb-2"
+          />
+          <v-checkbox
+            v-model="batchPrerendered"
+            label="PNG files are already rendered for this panel (upload them as they are)"
+            density="compact"
+            hide-details
+          />
+          <!-- #if FEATURE_UPLOAD_DEDUP -->
+          <v-checkbox
+            v-model="allowDuplicates"
+            label="Upload images the album already has, too"
+            density="compact"
+            hide-details
+          />
+          <!-- #endif -->
+        </div>
+        <v-list density="compact" style="max-height: 260px; overflow-y: auto">
+          <v-list-item v-for="(item, i) in batchState.items" :key="i" :subtitle="item.note">
+            <template #prepend>
+              <v-icon
+                :icon="batchIcon(item.status)"
+                :color="batchColor(item.status)"
+                class="mr-2"
+              />
+            </template>
+            <v-list-item-title>{{ item.name }}</v-list-item-title>
+          </v-list-item>
+        </v-list>
+        <div class="d-flex mt-3">
+          <v-btn v-if="batchState.phase === 'ready'" variant="text" @click="batchState = null">
+            Cancel
+          </v-btn>
+          <v-spacer />
+          <v-btn v-if="batchState.phase === 'ready'" color="primary" @click="uploadBatch">
+            <v-icon icon="mdi-upload" start />
+            Upload {{ batchState.items.length }} files
+          </v-btn>
+          <v-btn
+            v-else-if="batchState.phase === 'running'"
+            variant="text"
+            @click="batchState.cancel = true"
+          >
+            Stop after this file
+          </v-btn>
+          <v-btn v-else color="primary" @click="batchState = null"> Close </v-btn>
+        </div>
+      </div>
+
+      <!-- #endif -->
       <!-- Preview Area with Processing. In wide-edit mode the processing
            controls render beside the preview instead of in the Settings tab. -->
       <div v-else :class="{ 'edit-split': wideEdit }">
@@ -698,6 +1134,22 @@ async function generateAiImage() {
       </v-btn>
     </v-card-actions>
 
+    <!-- #if FEATURE_UPLOAD_DEDUP -->
+    <v-alert
+      v-if="duplicateExisting && showPreview"
+      type="warning"
+      variant="tonal"
+      density="compact"
+      class="mx-4 mb-4"
+    >
+      This image is already in the album ({{ duplicateExisting }}), so it was not uploaded.
+      <template #append>
+        <v-btn size="small" variant="text" :loading="uploading" @click="uploadAnyway">
+          Upload anyway
+        </v-btn>
+      </template>
+    </v-alert>
+    <!-- #endif -->
     <!-- Upload Progress -->
     <v-progress-linear v-if="uploading" :model-value="uploadProgress" color="primary" height="4" />
 

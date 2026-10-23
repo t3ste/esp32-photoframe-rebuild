@@ -16,8 +16,8 @@ FetchContent_Declare(
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
-# cJSON for the code that reads JSON: the copy the firmware build fetched (managed_components/ is not in the
-# repository), else the same release from upstream.
+# cJSON for the parsers that read JSON (the fuel-prices and market-quotes features): the copy the firmware build fetched
+# (managed_components/ is not in the repository), else the same release from upstream.
 set(CJSON_LOCAL "${CMAKE_CURRENT_SOURCE_DIR}/../managed_components/espressif__cjson/cJSON")
 if(EXISTS "${CJSON_LOCAL}/cJSON.c")
   set(CJSON_DIR "${CJSON_LOCAL}")
@@ -32,6 +32,20 @@ else()
   )
   FetchContent_MakeAvailable(cjson)
   set(CJSON_DIR "${cjson_SOURCE_DIR}")
+endif()
+
+# The QR code generator behind the recipe page's code (qrcodegen, MIT): the copy of the firmware's qrcode component
+# (managed_components/ is not in the repository), else the same library from upstream.
+set(QRCODEGEN_LOCAL "${CMAKE_CURRENT_SOURCE_DIR}/../managed_components/espressif__qrcode")
+if(EXISTS "${QRCODEGEN_LOCAL}/qrcodegen.c")
+  set(QRCODEGEN_DIR "${QRCODEGEN_LOCAL}")
+else()
+  FetchContent_Declare(
+    qrcodegen
+    URL https://github.com/nayuki/QR-Code-generator/archive/refs/tags/v1.8.0.tar.gz
+  )
+  FetchContent_MakeAvailable(qrcodegen)
+  set(QRCODEGEN_DIR "${qrcodegen_SOURCE_DIR}/c")
 endif()
 
 # Enable testing
@@ -60,6 +74,25 @@ set(FORK_FEATURE_DEFS
   CONFIG_FEATURE_ERROR_BANNER
   CONFIG_FEATURE_OTA_CHANNEL
   CONFIG_FEATURE_WIFI_RESILIENCE
+  CONFIG_FEATURE_WEBCAL
+  CONFIG_FEATURE_SOURCE_AUTH
+  CONFIG_FEATURE_CALDAV
+  CONFIG_FEATURE_CALDAV_TODO
+  CONFIG_FEATURE_GLYPHS
+  CONFIG_FEATURE_INFO_SCREENS
+  CONFIG_FEATURE_CHORE_WHEEL
+  CONFIG_FEATURE_WEATHER_SCREEN
+  CONFIG_FEATURE_FACT_OF_THE_DAY
+  CONFIG_FEATURE_FINANCE_SNAPSHOT
+  CONFIG_FEATURE_FUEL_PRICES
+  CONFIG_FEATURE_MARKET_QUOTES
+  CONFIG_FEATURE_ROUTE_TIME
+  CONFIG_FEATURE_ARTWORKS
+  CONFIG_FEATURE_SCHEDULE_PAGES
+  CONFIG_FEATURE_RECIPES
+  CONFIG_FEATURE_TEXT_OUTLINE
+  CONFIG_FEATURE_UPLOAD_DEDUP
+  CONFIG_FEATURE_MULTI_UPLOAD
   CONFIG_FEATURE_FACECROP
   CONFIG_FORK_FIXES
   CONFIG_FORK_HTTP_FETCH
@@ -86,6 +119,139 @@ target_include_directories(
   cron_test
   PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../main
+)
+
+# Which schedule draws when several overlap (build option schedule-pages; pure, against a brute-force reference)
+add_executable(
+  sched_pick_test
+  test_sched_pick.cpp
+  ../main/sched_pick.c
+  ../main/cron.c
+)
+
+target_link_libraries(
+  sched_pick_test
+  GTest::gtest_main
+)
+
+target_include_directories(
+  sched_pick_test
+  PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../main
+)
+
+# The travel time on the fuel page (build option route-time): requests, the readers of the TomTom and HERE
+# answers, the address checks and the rule for a time that is too long (the real cJSON)
+add_executable(
+  route_test
+  test_route.cpp
+  ../main/route_time.c
+  ${CJSON_DIR}/cJSON.c
+)
+
+target_compile_definitions(
+  route_test
+  PRIVATE
+  ROUTE_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/route"
+)
+
+target_link_libraries(
+  route_test
+  GTest::gtest_main
+  m
+)
+
+target_include_directories(
+  route_test
+  PRIVATE
+  ${CJSON_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../main
+)
+
+# The text cleaning of the recipe page (build option recipes): UTF-8 into the font's code, HTML, steps,
+# paragraphs, times and amounts
+add_executable(
+  recipe_text_test
+  test_recipe_text.cpp
+  ../main/recipe_text.c
+)
+
+target_link_libraries(
+  recipe_text_test
+  GTest::gtest_main
+  m
+)
+
+target_include_directories(
+  recipe_text_test
+  PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../main
+)
+
+# The sources of the recipe page: the lists, the requests and the readers of the Chefkoch and TheMealDB answers
+# (invented answers of data/recipe, the real cJSON)
+add_executable(
+  recipe_source_test
+  test_recipe_source.cpp
+  ../main/recipe_source.c
+  ../main/recipe_text.c
+  ../main/json_scan.c
+  ${CJSON_DIR}/cJSON.c
+)
+
+target_compile_definitions(
+  recipe_source_test
+  PRIVATE
+  RECIPE_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/recipe"
+)
+
+target_link_libraries(
+  recipe_source_test
+  GTest::gtest_main
+  m
+)
+
+target_include_directories(
+  recipe_source_test
+  PRIVATE
+  ${CJSON_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../main
+)
+
+# The device side of the travel time on the PC: the settings and the HTTP helper are faked, the answers are the
+# test answers of data/route
+add_executable(
+  route_service_test
+  test_route_service.cpp
+  ../main/route_service.c
+  ../main/route_time.c
+  ${CJSON_DIR}/cJSON.c
+)
+
+target_compile_definitions(
+  route_service_test
+  PRIVATE
+  ${FORK_FEATURE_DEFS}
+  ROUTE_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/route"
+)
+
+target_link_libraries(
+  route_service_test
+  GTest::gtest_main
+  m
+)
+
+target_include_directories(
+  route_service_test
+  PRIVATE
+  ${CJSON_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/stubs
   ${CMAKE_CURRENT_SOURCE_DIR}/../main
 )
 
@@ -146,6 +312,547 @@ target_include_directories(
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../main
 )
+
+# Login inside a download URL (user:password@host, source-auth feature)
+add_executable(
+  source_auth_test
+  test_source_auth.cpp
+  ../main/source_auth.c
+)
+
+target_link_libraries(
+  source_auth_test
+  GTest::gtest_main
+)
+
+target_include_directories(
+  source_auth_test
+  PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../main
+)
+
+# Duplicate detection index and MD5 (upload-dedup feature)
+add_executable(
+  dedup_test
+  test_dedup.cpp
+  test_dedup_payload.cpp
+  ../main/dedup.c
+  ../main/dedup_payload.c
+)
+
+target_link_libraries(
+  dedup_test
+  GTest::gtest_main
+  PNG::PNG
+  m
+)
+
+target_include_directories(
+  dedup_test
+  PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+  ${CMAKE_CURRENT_SOURCE_DIR}/../main
+)
+
+# CalDAV calendar queries: request body and multistatus extraction (caldav feature)
+add_executable(
+  caldav_test
+  test_caldav.cpp
+  ../main/caldav.c
+)
+
+target_link_libraries(
+  caldav_test
+  GTest::gtest_main
+)
+
+target_include_directories(
+  caldav_test
+  PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../main
+)
+
+# iCalendar to-dos as ToDo-column items (caldav-todo feature)
+add_executable(
+  vtodo_test
+  test_vtodo.cpp
+  ../main/vtodo.c
+  stubs/fake_image_processor_sanitize.c
+)
+
+target_compile_definitions(
+  vtodo_test
+  PRIVATE
+  ${FORK_FEATURE_DEFS}
+)
+
+target_link_libraries(
+  vtodo_test
+  GTest::gtest_main
+)
+
+target_include_directories(
+  vtodo_test
+  PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+  ${CMAKE_CURRENT_SOURCE_DIR}/../main
+)
+
+# Extra glyphs (umlauts, sharp s, degree, euro) in the bitmap font (glyphs feature); the real Font24
+# table of the e-paper driver is linked so the umlauts are checked against the font itself
+add_executable(
+  glyph_extras_test
+  test_glyph_extras.cpp
+  ../main/glyph_extras.c
+  ../components/epaper_src/Fonts/font24.c
+)
+
+target_link_libraries(
+  glyph_extras_test
+  GTest::gtest_main
+)
+
+target_include_directories(
+  glyph_extras_test
+  PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../main
+  ${CMAKE_CURRENT_SOURCE_DIR}/../components/epaper_src/Fonts
+)
+
+# Drawing primitives of the info screens (info-screens feature); the real Font24 table and the
+# extra glyphs are linked, so text is checked against the font itself
+add_executable(
+  screen_canvas_test
+  test_screen_canvas.cpp
+  ../main/screen_canvas.c
+  ../main/glyph_extras.c
+  ../components/epaper_src/Fonts/font24.c
+)
+
+target_compile_definitions(
+  screen_canvas_test
+  PRIVATE
+  ${FORK_FEATURE_DEFS}
+)
+
+target_link_libraries(
+  screen_canvas_test
+  GTest::gtest_main
+  m
+)
+
+target_include_directories(
+  screen_canvas_test
+  PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+  ${CMAKE_CURRENT_SOURCE_DIR}/../main
+  ${CMAKE_CURRENT_SOURCE_DIR}/../components/epaper_src/Fonts
+)
+
+# Big stroke digits for the info screens (temperatures, prices)
+add_executable(
+  screen_digits_test
+  test_screen_digits.cpp
+  ../main/screen_digits.c
+  ../main/screen_canvas.c
+  ../main/glyph_extras.c
+  ../components/epaper_src/Fonts/font24.c
+)
+
+target_compile_definitions(
+  screen_digits_test
+  PRIVATE
+  ${FORK_FEATURE_DEFS}
+)
+
+target_link_libraries(
+  screen_digits_test
+  GTest::gtest_main
+  m
+)
+
+target_include_directories(
+  screen_digits_test
+  PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+  ${CMAKE_CURRENT_SOURCE_DIR}/../main
+  ${CMAKE_CURRENT_SOURCE_DIR}/../components/epaper_src/Fonts
+)
+
+# Facts of the fact-of-the-day page: pack format, pick of the day, built-in facts
+add_executable(
+  fact_pack_test
+  test_fact_pack.cpp
+  ../main/fact_pack.c
+)
+
+target_link_libraries(
+  fact_pack_test
+  GTest::gtest_main
+)
+
+target_include_directories(
+  fact_pack_test
+  PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../main
+)
+
+# Exchange-rate parser and page of the finance-snapshot feature (real ECB answers as fixtures)
+add_executable(
+  finance_test
+  test_finance.cpp
+  ../main/fx_rates.c
+  ../main/screen_finance.c
+  ../main/screen_digits.c
+  ../main/screen_canvas.c
+  ../main/glyph_extras.c
+  ../main/info_screens_core.c
+  ../components/epaper_src/Fonts/font24.c
+)
+
+target_compile_definitions(
+  finance_test
+  PRIVATE
+  ${FORK_FEATURE_DEFS}
+  FINANCE_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/ecb"
+)
+
+target_link_libraries(
+  finance_test
+  GTest::gtest_main
+  m
+)
+
+target_include_directories(
+  finance_test
+  PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+  ${CMAKE_CURRENT_SOURCE_DIR}/../main
+  ${CMAKE_CURRENT_SOURCE_DIR}/../components/epaper_src/Fonts
+)
+
+# Answer parser and page of the fuel-prices feature (Tankerkoenig answers as fixtures, the real cJSON)
+add_executable(
+  fuel_test
+  test_fuel.cpp
+  ../main/fuel_prices.c
+  ../main/json_scan.c
+  ../main/screen_fuel.c
+  ../main/screen_digits.c
+  ../main/screen_canvas.c
+  ../main/glyph_extras.c
+  ../main/info_screens_core.c
+  ${CJSON_DIR}/cJSON.c
+  ../components/epaper_src/Fonts/font24.c
+)
+
+target_compile_definitions(
+  fuel_test
+  PRIVATE
+  ${FORK_FEATURE_DEFS}
+  FUEL_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/tankerkoenig"
+)
+
+target_link_libraries(
+  fuel_test
+  GTest::gtest_main
+  m
+)
+
+target_include_directories(
+  fuel_test
+  PRIVATE
+  ${CJSON_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+  ${CMAKE_CURRENT_SOURCE_DIR}/../main
+  ${CMAKE_CURRENT_SOURCE_DIR}/../components/epaper_src/Fonts
+)
+
+# Parsers, requests, quota and cache of the market-quotes feature (real answers of the three sources as
+# fixtures, the real cJSON)
+add_executable(
+  market_test
+  test_market.cpp
+  test_market_screen.cpp
+  test_json_scan.cpp
+  ../main/market_quotes.c
+  ../main/json_scan.c
+  ../main/screen_markets.c
+  ../main/screen_digits.c
+  ../main/screen_canvas.c
+  ../main/glyph_extras.c
+  ../main/info_screens_core.c
+  ${CJSON_DIR}/cJSON.c
+  ../components/epaper_src/Fonts/font24.c
+)
+
+target_compile_definitions(
+  market_test
+  PRIVATE
+  ${FORK_FEATURE_DEFS}
+  MARKET_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/market"
+)
+
+target_link_libraries(
+  market_test
+  GTest::gtest_main
+  m
+)
+
+target_include_directories(
+  market_test
+  PRIVATE
+  ${CJSON_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+  ${CMAKE_CURRENT_SOURCE_DIR}/../main
+  ${CMAKE_CURRENT_SOURCE_DIR}/../components/epaper_src/Fonts
+)
+
+# The artworks mode (kind and source choice, caption text, the readers of the three museum services against
+# real answers as fixtures, the album rule on a temporary directory; the real cJSON)
+add_executable(
+  art_test
+  test_art.cpp
+  ../main/art_select.c
+  ../main/art_caption.c
+  ../main/art_sources.c
+  ../main/art_store.c
+  ${CJSON_DIR}/cJSON.c
+)
+
+target_compile_definitions(
+  art_test
+  PRIVATE
+  ${FORK_FEATURE_DEFS}
+  ART_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/art"
+)
+
+target_link_libraries(
+  art_test
+  GTest::gtest_main
+  m
+)
+
+target_include_directories(
+  art_test
+  PRIVATE
+  ${CJSON_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+  ${CMAKE_CURRENT_SOURCE_DIR}/../main
+)
+
+# The device side of the markets page (main/market_service.c) with the settings and the HTTP helper faked,
+# real answers as fixtures, and the cache as a real file in a temporary directory
+add_executable(
+  market_service_test
+  test_market_service.cpp
+  ../main/market_service.c
+  ../main/market_quotes.c
+  ../main/json_scan.c
+  ${CJSON_DIR}/cJSON.c
+)
+
+target_compile_definitions(
+  market_service_test
+  PRIVATE
+  ${FORK_FEATURE_DEFS}
+  MARKET_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/market"
+  FS_MOUNT_POINT="/tmp/pf_market_service_test"
+)
+
+target_link_libraries(
+  market_service_test
+  GTest::gtest_main
+  m
+)
+
+target_include_directories(
+  market_service_test
+  PRIVATE
+  ${CJSON_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+  ${CMAKE_CURRENT_SOURCE_DIR}/../main
+)
+
+# The pure parts of the info screens: ISO weeks, names, rotation, list parsing
+add_executable(
+  info_screens_core_test
+  test_info_screens_core.cpp
+  ../main/info_screens_core.c
+)
+
+target_link_libraries(
+  info_screens_core_test
+  GTest::gtest_main
+)
+
+target_include_directories(
+  info_screens_core_test
+  PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../main
+)
+
+# The screens themselves, drawn at the sizes of the boards (info-screens features). All screens
+# share the sources list below; the render harness draws the same cases as pictures.
+set(INFO_SCREEN_SOURCES
+  ../main/screen_canvas.c
+  ../main/glyph_extras.c
+  ../main/info_screens_core.c
+  ../main/screen_chore_wheel.c
+  ../main/screen_digits.c
+  ../main/screen_weather.c
+  ../main/screen_fact.c
+  ../main/fact_pack.c
+  ../main/screen_finance.c
+  ../main/fx_rates.c
+  ../main/screen_fuel.c
+  ../main/fuel_prices.c
+  ../main/json_scan.c
+  ../main/screen_markets.c
+  ../main/market_quotes.c
+  ${CJSON_DIR}/cJSON.c
+  ../components/epaper_src/Fonts/font24.c
+)
+
+add_executable(
+  screens_test
+  test_screens.cpp
+  test_info_notes.cpp
+  ${INFO_SCREEN_SOURCES}
+)
+
+add_executable(
+  render_screens
+  render_screens.cpp
+  ${INFO_SCREEN_SOURCES}
+)
+
+foreach(screens_target screens_test render_screens)
+  target_compile_definitions(${screens_target} PRIVATE ${FORK_FEATURE_DEFS})
+  target_include_directories(
+    ${screens_target}
+    PRIVATE
+    ${CJSON_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+    ${CMAKE_CURRENT_SOURCE_DIR}/../main
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/epaper_src/Fonts
+  )
+endforeach()
+
+target_link_libraries(screens_test GTest::gtest_main m)
+target_link_libraries(render_screens PNG::PNG m)
+
+# The recipe page (build option recipes): the layout, the fonts, the text, the sources and the QR code. The tests and
+# the render harness share the sources.
+set(RECIPE_SCREEN_SOURCES
+  ../main/recipe_engine.c
+  ../main/recipe_layout.c
+  ../main/recipe_font.c
+  ../main/recipe_font_data.c
+  ../main/recipe_qr.c
+  ../main/recipe_text.c
+  ../main/recipe_source.c
+  ../main/json_scan.c
+  ../main/screen_canvas.c
+  ../main/glyph_extras.c
+  ../components/epaper_src/Fonts/font24.c
+  ${CJSON_DIR}/cJSON.c
+  ${QRCODEGEN_DIR}/qrcodegen.c
+)
+
+add_executable(
+  render_recipe
+  render_recipe.cpp
+  ${RECIPE_SCREEN_SOURCES}
+)
+
+target_compile_definitions(
+  render_recipe
+  PRIVATE
+  ${FORK_FEATURE_DEFS}
+  RECIPE_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/recipe"
+)
+
+target_include_directories(
+  render_recipe
+  PRIVATE
+  ${CJSON_DIR}
+  ${QRCODEGEN_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+  ${CMAKE_CURRENT_SOURCE_DIR}/../main
+  ${CMAKE_CURRENT_SOURCE_DIR}/../components/epaper_src/Fonts
+)
+
+target_link_libraries(render_recipe PNG::PNG m)
+
+add_executable(
+  recipe_layout_test
+  test_recipe_layout.cpp
+  ${RECIPE_SCREEN_SOURCES}
+)
+
+target_compile_definitions(
+  recipe_layout_test
+  PRIVATE
+  ${FORK_FEATURE_DEFS}
+  RECIPE_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/recipe"
+)
+
+target_include_directories(
+  recipe_layout_test
+  PRIVATE
+  ${CJSON_DIR}
+  ${QRCODEGEN_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+  ${CMAKE_CURRENT_SOURCE_DIR}/../main
+  ${CMAKE_CURRENT_SOURCE_DIR}/../components/epaper_src/Fonts
+)
+
+target_link_libraries(recipe_layout_test GTest::gtest_main m)
+
+# How the page gets its recipe: the tries, the choosing and the rules, with a made-up network, picture decoder,
+# clock and dice
+add_executable(
+  recipe_engine_test
+  test_recipe_engine.cpp
+  ${RECIPE_SCREEN_SOURCES}
+)
+
+target_compile_definitions(
+  recipe_engine_test
+  PRIVATE
+  ${FORK_FEATURE_DEFS}
+  RECIPE_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/recipe"
+)
+
+target_include_directories(
+  recipe_engine_test
+  PRIVATE
+  ${CJSON_DIR}
+  ${QRCODEGEN_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+  ${CMAKE_CURRENT_SOURCE_DIR}/../main
+  ${CMAKE_CURRENT_SOURCE_DIR}/../components/epaper_src/Fonts
+)
+
+target_link_libraries(recipe_engine_test GTest::gtest_main m)
 
 # Microphone level maths (RMS/peak in dBFS, text bar) behind the console level test
 # (voice-stop feature)
@@ -343,6 +1050,9 @@ add_executable(
   todo_test
   test_todo.cpp
   ../main/todo.c
+  ../main/caldav.c
+  ../main/caldav_fetch.c
+  ../main/vtodo.c
   stubs/fake_http_fetch.c
   stubs/fake_image_processor_sanitize.c
 )
@@ -351,6 +1061,7 @@ target_compile_definitions(
   todo_test
   PRIVATE
   ${FORK_FEATURE_DEFS}
+  CALDAV_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/caldav"
 )
 
 target_link_libraries(
@@ -374,6 +1085,8 @@ add_executable(
   calendar_ics_test
   test_calendar_ics.cpp
   ../main/calendar_ics.c
+  ../main/caldav.c
+  ../main/caldav_fetch.c
   stubs/fake_http_fetch.c
   stubs/fake_image_processor_sanitize.c
 )
@@ -382,6 +1095,7 @@ target_compile_definitions(
   calendar_ics_test
   PRIVATE
   ${FORK_FEATURE_DEFS}
+  CALDAV_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/caldav"
 )
 
 target_link_libraries(
@@ -391,6 +1105,56 @@ target_link_libraries(
 
 target_include_directories(
   calendar_ics_test
+  PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+  ${CMAKE_CURRENT_SOURCE_DIR}/../main
+)
+
+# libical (components/libical, vendored unmodified) and main/calendar_rrule.c, the build option `agenda-rrule`:
+# the library as a static library of its own, and two programs - the adapter alone, and calendar_ics.c with the
+# option on (the other calendar tests above build calendar_ics.c with it off, which is the default firmware).
+set(LIBICAL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../components/libical)
+file(GLOB LIBICAL_SOURCES ${LIBICAL_DIR}/libical/*.c)
+add_library(libical_host STATIC ${LIBICAL_SOURCES})
+target_compile_definitions(libical_host PRIVATE HAVE_CONFIG_H=1)
+target_compile_options(libical_host PRIVATE -w)
+target_include_directories(libical_host PUBLIC ${LIBICAL_DIR}/libical PRIVATE ${LIBICAL_DIR}/port)
+
+add_executable(
+  calendar_rrule_test
+  test_calendar_rrule.cpp
+  ../main/calendar_rrule.c
+)
+target_compile_definitions(calendar_rrule_test PRIVATE ${FORK_FEATURE_DEFS} CONFIG_FEATURE_AGENDA_RRULE)
+target_link_libraries(calendar_rrule_test libical_host GTest::gtest_main)
+target_include_directories(
+  calendar_rrule_test
+  PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+  ${CMAKE_CURRENT_SOURCE_DIR}/../main
+)
+
+add_executable(
+  calendar_ics_rrule_test
+  test_calendar_ics_rrule.cpp
+  ../main/calendar_ics.c
+  ../main/calendar_rrule.c
+  ../main/caldav.c
+  ../main/caldav_fetch.c
+  stubs/fake_http_fetch.c
+  stubs/fake_image_processor_sanitize.c
+)
+target_compile_definitions(
+  calendar_ics_rrule_test
+  PRIVATE
+  ${FORK_FEATURE_DEFS}
+  CONFIG_FEATURE_AGENDA_RRULE
+)
+target_link_libraries(calendar_ics_rrule_test libical_host GTest::gtest_main)
+target_include_directories(
+  calendar_ics_rrule_test
   PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/stubs
@@ -442,6 +1206,9 @@ add_executable(
   example_calendars_test
   test_example_calendars.cpp
   ../main/calendar_ics.c
+  ../main/caldav.c
+  ../main/caldav_fetch.c
+  ../main/vtodo.c
   ../main/todo.c
   stubs/fake_http_fetch.c
   stubs/fake_image_processor_sanitize.c
@@ -526,8 +1293,30 @@ target_include_directories(
 # Discover tests
 include(GoogleTest)
 gtest_discover_tests(cron_test)
+gtest_discover_tests(sched_pick_test)
+gtest_discover_tests(route_test)
+gtest_discover_tests(route_service_test)
+gtest_discover_tests(recipe_text_test)
+gtest_discover_tests(recipe_source_test)
+gtest_discover_tests(recipe_layout_test)
+gtest_discover_tests(recipe_engine_test)
 gtest_discover_tests(wake_schedule_test)
 gtest_discover_tests(http_auth_test)
+gtest_discover_tests(source_auth_test)
+gtest_discover_tests(caldav_test)
+gtest_discover_tests(dedup_test)
+gtest_discover_tests(vtodo_test)
+gtest_discover_tests(glyph_extras_test)
+gtest_discover_tests(screen_canvas_test)
+gtest_discover_tests(screen_digits_test)
+gtest_discover_tests(fact_pack_test)
+gtest_discover_tests(finance_test)
+gtest_discover_tests(fuel_test)
+gtest_discover_tests(market_test)
+gtest_discover_tests(art_test)
+gtest_discover_tests(market_service_test)
+gtest_discover_tests(info_screens_core_test)
+gtest_discover_tests(screens_test)
 gtest_discover_tests(network_backoff_test)
 gtest_discover_tests(crash_record_test)
 gtest_discover_tests(wifi_retry_test)
@@ -542,6 +1331,8 @@ gtest_discover_tests(kws_test)
 gtest_discover_tests(headlines_test)
 gtest_discover_tests(todo_test)
 gtest_discover_tests(calendar_ics_test)
+gtest_discover_tests(calendar_rrule_test)
+gtest_discover_tests(calendar_ics_rrule_test)
 gtest_discover_tests(agenda_order_test)
 gtest_discover_tests(wake_minute_test)
 gtest_discover_tests(example_calendars_test)
@@ -620,6 +1411,8 @@ add_executable(
   epdgz_decode_test
   test_epdgz_decode.cpp
   ../main/image_processor.c
+  ../main/text_outline.c
+  ../main/glyph_extras.c
   ../main/jpeg_header.c
   stubs/esp_stubs.c
   stubs/fake_display_manager.c
@@ -661,6 +1454,8 @@ foreach(test_name image_pipeline display_flow)
   set(fork_sources
     test_${test_name}.cpp
     ../main/image_processor.c
+    ../main/text_outline.c
+    ../main/glyph_extras.c
     ../main/jpeg_header.c
     stubs/esp_stubs.c
     stubs/fake_display_manager.c
@@ -702,3 +1497,128 @@ foreach(test_name image_pipeline display_flow)
 
   gtest_discover_tests(${fork_target} TEST_SUFFIX " (fork)")
 endforeach()
+
+# The small caption of the artworks mode drawn by the real image_processor.c (white text with a black border, no bar)
+add_executable(
+  art_caption_draw_test
+  test_art_caption_draw.cpp
+  ../main/image_processor.c
+  ../main/text_outline.c
+  ../main/glyph_extras.c
+  ../main/jpeg_header.c
+  stubs/esp_stubs.c
+  stubs/fake_display_manager.c
+  stubs/fake_config_manager.c
+  stubs/fake_processing_settings.c
+  stubs/fork_stubs.c
+  ../components/epaper_src/Fonts/font24.c
+)
+
+target_compile_definitions(
+  art_caption_draw_test
+  PRIVATE
+  ${FORK_FEATURE_DEFS}
+)
+
+target_include_directories(
+  art_caption_draw_test
+  PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+  ${CMAKE_CURRENT_SOURCE_DIR}/../main
+  ${CMAKE_CURRENT_SOURCE_DIR}/../components/epaper_src
+  ${CMAKE_CURRENT_SOURCE_DIR}/../components/epaper_src/Fonts
+)
+
+target_link_libraries(
+  art_caption_draw_test
+  GTest::gtest_main
+  PNG::PNG
+  m
+)
+
+gtest_discover_tests(art_caption_draw_test)
+
+# The umlaut/degree/euro glyphs through the real sanitizer and text drawing of image_processor.c
+# (glyphs feature)
+add_executable(
+  glyph_text_test
+  test_glyph_text.cpp
+  ../main/image_processor.c
+  ../main/text_outline.c
+  ../main/glyph_extras.c
+  ../main/jpeg_header.c
+  ../main/screen_canvas.c
+  stubs/esp_stubs.c
+  stubs/fake_display_manager.c
+  stubs/fake_config_manager.c
+  stubs/fake_processing_settings.c
+  stubs/fork_stubs.c
+  ../components/epaper_src/Fonts/font24.c
+)
+
+target_compile_definitions(
+  glyph_text_test
+  PRIVATE
+  ${FORK_FEATURE_DEFS}
+)
+
+target_include_directories(
+  glyph_text_test
+  PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+  ${CMAKE_CURRENT_SOURCE_DIR}/../main
+  ${CMAKE_CURRENT_SOURCE_DIR}/../components/epaper_src
+  ${CMAKE_CURRENT_SOURCE_DIR}/../components/epaper_src/Fonts
+)
+
+target_link_libraries(
+  glyph_text_test
+  GTest::gtest_main
+  PNG::PNG
+  m
+)
+
+gtest_discover_tests(glyph_text_test)
+
+# The overlay and caption text without a bar (text-outline feature): the pure helpers of text_outline.c
+# and the real image_processor.c drawing the border text, in the caption's and the overlay's look
+add_executable(
+  text_outline_test
+  test_text_outline.cpp
+  ../main/image_processor.c
+  ../main/text_outline.c
+  ../main/glyph_extras.c
+  ../main/jpeg_header.c
+  stubs/esp_stubs.c
+  stubs/fake_display_manager.c
+  stubs/fake_config_manager.c
+  stubs/fake_processing_settings.c
+  stubs/fork_stubs.c
+  ../components/epaper_src/Fonts/font24.c
+)
+
+target_compile_definitions(
+  text_outline_test
+  PRIVATE
+  ${FORK_FEATURE_DEFS}
+)
+
+target_include_directories(
+  text_outline_test
+  PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+  ${CMAKE_CURRENT_SOURCE_DIR}/../main
+  ${CMAKE_CURRENT_SOURCE_DIR}/../components/epaper_src
+  ${CMAKE_CURRENT_SOURCE_DIR}/../components/epaper_src/Fonts
+)
+
+target_link_libraries(
+  text_outline_test
+  GTest::gtest_main
+  PNG::PNG
+  m
+)
+
+gtest_discover_tests(text_outline_test)

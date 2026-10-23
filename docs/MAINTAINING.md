@@ -84,6 +84,8 @@ Why two: GitHub allows one fork of a repository per account, and the maintainer'
 its slot for the older fork, so the project began as a standalone repository there. A second account
 (`t3stier`) made the real fork; the first repository was kept as a mirror.
 
+The **extended line** (the `extras` features, kept next to `main`) has its own repository and a source branch: see [EXTENDED_LINE.md](EXTENDED_LINE.md).
+
 Local remotes: `origin` = mirror, `t3stier` = canonical fork, `upstream` = aitjcize. **Every push goes to both**:
 
 ```sh
@@ -158,7 +160,9 @@ them: no fetch, pull, checkout, commit, gc or new files there.
 
 ## 5. How the feature system works
 
-- **Registry**: `scripts/features.py` (name, Kconfig symbol, dependencies, hardware needs, sdkconfig overlay).
+- **Registry**: `scripts/features.py` (name, Kconfig symbol, dependencies, hardware needs, sdkconfig overlay), and its
+  bundles (`BUNDLES`: one name for several features, `--with extras`; expanded before anything is decided, no Kconfig
+  symbol, no overlay - a new feature of that kind is added to the bundle's members, `scripts/test_features.py` pins the list).
   Hardware capabilities: `boards/capabilities.json` (speaker, microphone, climate sensor per board); a CI check
   (`scripts/check_capabilities.py`) keeps `boards.json`, `capabilities.json` and the Kconfig tables consistent.
 - **Build**: `build.py --with ... | --all-features | --without x | --list-features | --ota-repo owner/name`.
@@ -214,7 +218,7 @@ which to run after which change.
 | Binary acceptance A | `python scripts/verify_baseline.py --board <b>` (IDF shell) | Kconfig symbols, ELF `nm`, `.bin` size equal to an upstream build; `--all-features` variants compare against the old fork | **feeds both builds the same prebuilt web assets - cannot see web differences** |
 | Web bundle byte compare | manual, below | the all-off web bundle is byte-identical to a build of upstream's own webapp | - |
 | Compile matrix | `python scripts/feature_matrix.py --board <b> off fixes single ...` (IDF shell) | every flag alone, none, all compile (`--full` also links) | runtime |
-| Host tests | section 7 | 314 tests: upstream tests on the all-off code + module tests + "(fork)" image variants | hardware |
+| Host tests | section 7 | 1118 tests: upstream tests on the all-off code + module tests + "(fork)" image variants | hardware |
 
 After **any** edit to a shared file: `alloff_source.py`, `alloff_web.py`, `xref.py`, host tests (and `web_bindings.py` after a web change), plus a real build
 of the board you touched. After an **upstream merge** or a **web change**: also the manual bundle compare and
@@ -291,12 +295,33 @@ ctest --test-dir ~/pf-host-build            # SERIAL: tests of one binary share 
 ```
 
 Keep the build directory outside the repository. `-j` with ctest makes the DisplayFlow tests flake. Result at the
-time of writing: 339/339.
+time of writing: 1118/1118 (47 programs).
+
+The pure modules of the recipe page (`recipe_text`, `recipe_source`, `recipe_layout`, `recipe_engine`) were also run under
+AddressSanitizer and UBSan - they found an over-read in the entity decoder that the plain run did not show. Configure a second build
+directory with `-DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g"` (the same for `CMAKE_CXX_FLAGS`, and
+`-fsanitize=address,undefined` as `CMAKE_EXE_LINKER_FLAGS`) and run the four `recipe_*_test` programs; do it again after a change to those files.
+The parsers and the layout of the recipe page were also run through a mutation fuzzer under ASan, UBSan and LeakSanitizer (mutated
+copies of the invented fixtures, random texts, a made-up network that answers with garbage; eight seeds of 6000 rounds were clean): a parser of
+text from the internet should be fuzzed again after a change. It is a local helper (not in the repository): one `main()` that calls the public
+functions of `recipe_text.h`, `recipe_source.h`, `recipe_layout.h` and `recipe_engine.h`, compiled with the sources of the host tests.
+`host_tests/render_recipe.cpp` (`render_recipe <dir>`) draws the page for the panels of all boards and both orientations into PNG files; the
+pictures in the docs come from it. The fonts of the page are generated: `scripts/gen_recipe_font.py` needs the Noto Sans files (not in the
+repository; see the script's header) and writes `main/recipe_font_data.c`; run it only to change the sizes or the characters, and keep
+`docs/third_party/NotoSans-OFL.txt`.
 
 **Tooling traps on Windows**: `json.dumps` reformats files (edit JSON as text); backslash escapes and odd numbers
 of quotes/backticks in shell-tool heredocs are unreliable (write patch scripts to a file and run them); `which`
 may dump a huge PATH; `H` is a PowerShell alias (do not name a function `H`); pipe `git archive | tar` in Bash,
 not PowerShell.
+A full firmware build recompiles every object whenever the commit hash changes (it is a `-D` define of the whole
+build), and the xtensa GCC 15.2 crashes now and then with `internal compiler error: Segmentation fault` in
+`esp_lcd_panel_rgb.c` (an IDF file, nothing of ours; it compiles on its own): run the build again. The feature matrix
+overwrites `main/webapp` with the bundle of its last set - regenerate it (`--step webapp --step splash`, outside the IDF
+shell) before a firmware-only build. A `-Werror=format-truncation` that the host compiler does not show turns up in the
+device build: give `snprintf` buffers for `%d` at least 12 bytes.
+`long` is 32 bit on xtensa and 64 bit in the host tests: arithmetic that can pass 2^31 (a time in seconds times a
+percentage) needs `int64_t` - a host test cannot show the difference.
 
 ## 8. Continuous integration
 
@@ -622,18 +647,18 @@ fix; the rest are standing notes, not work items.
   the config getters/setters, `cold_boot_wifi_retry()` and `wifi_manager_last_failure_is_credential_reject()`) are gone; a short note in `main/config.h` names the three retired NVS entries
   (`wifi_ext_retry`, `wifi_cb_fail`, `wifi_reprov_en`), which an older device may still hold and nothing reads. A config export of an older build that carries the two fields is still accepted (unknown
   fields are ignored). The option itself stays: TX cap, performance mode, the Telegram power-save budget and MIC/802.1X-as-rejection are not upstream's.
-- **Calendar recurrence engine (decided 2026-10-06, steps 0-1 done 2026-10-09).** The Agenda's own reader (`main/calendar_ics.c`) takes DAILY/WEEKLY rules only ([CALENDAR_RRULE_SUPPORT.md](CALENDAR_RRULE_SUPPORT.md)). A read-only review of three candidates (uICAL, GoogleCalendarClient, libical;
-  host-measured against a `python-dateutil` reference, 25 rule cases, 10 broken-rule cases, a 2.4 MB feed) chose **libical** (v4.0.6; LGPL-2.1 *or* MPL-2.0 - **MPL-2.0 is the accepted choice**): 24 of 25 valid cases
-  right, daylight saving time and `TZID` right with the feed's own `VTIMEZONE`, about 93 KB of flash (cross-compile estimate, not a device measurement). uICAL was out (fixed UTC offset per zone - a Berlin event is an hour
+- **Calendar recurrence engine (decided 2026-10-06, done 2026-10-10 in the extended line).** The Agenda's own reader (`main/calendar_ics.c`) takes DAILY/WEEKLY rules only ([CALENDAR_RRULE_SUPPORT.md](CALENDAR_RRULE_SUPPORT.md)). A read-only review of three candidates (uICAL, GoogleCalendarClient, libical;
+  host-measured against a `python-dateutil` reference, 25 rule cases, 10 broken-rule cases, a 2.4 MB feed) chose **libical** (v4.0.6; LGPL-2.1 *or* MPL-2.0 - **MPL-2.0 is the accepted choice**). uICAL was out (fixed UTC offset per zone - a Berlin event is an hour
   off in winter -, its loader drops `EXDATE`/`RDATE`/`RECURRENCE-ID`, it throws C++ exceptions, walks from `DTSTART` linearly and hangs on `INTERVAL=0`); GoogleCalendarClient is no recurrence engine at all (ESP8266/Arduino,
-  no `singleEvents`, certificate checks off, Google's device flow does not allow the Calendar scope). Done: steps 0-1 (the library-independent fixes: DST on the wall clock, `EXDATE`/`RDATE`/`RECURRENCE-ID`/`STATUS`/`DURATION`,
-  earliest-48 list; tests, fuzzing and a differential run against libical on 97 public fixtures). **Still open** (maintainer decided: go ahead with the option, name `agenda-rrule`, a sub-option of `agenda`; target limits were proposed - flash growth at most 150 KB, a
-  2 MB / 30-day window in about 2 s on the ESP32-S3 (today's reader needs 4.5 s, so this needs checking), the internal heap left for a following TLS connection, the M5Paper must run - and the maintainer answered yes; the numbers are fixed after the proof of concept): (2) a proof of concept on a device - libical must be used **one VEVENT at a time** (parsing the whole feed takes about ten times its size in RAM: 25 MB for 2.4 MB),
-  measured against today's 4.5 s for a 2 MB / 4000-event feed on the ESP32-S3; (3) the vendored component (generated sources checked in, a hand-written `config.h`, `UPSTREAM.md` with tag/commit/SHA256, MPL-2.0 text and notice under
-  `docs/third_party/`, no Kconfig symbol so the all-off proofs stay); (4) an adapter that keeps the scanner for unfolding, window prefilter and `EXDATE` handling, hands only repeating events to libical, drops events libical reports
-  errors for (`icalcomponent_count_errors()`, so fail-closed stays) and bounds iterations and results itself (`foreach_recurrence` cannot be stopped from its callback; `FREQ` below DAILY is refused; `RDATE` with `TZID` must be
-  resolved by hand); (5)-(7) a temporary parallel comparison of old and new expansion in the log, rollout through an `extras` pre-release, docs and support matrix, removal of the old expander only after an acceptance cycle.
-  Whether the option lives in the base or the extended line is not decided. Public feeds, generated feeds or invented ones are the test data (the maintainer has no feeds that may be used).
+  no `singleEvents`, certificate checks off, Google's device flow does not allow the Calendar scope). Steps 0-1 (the library-independent fixes: DST on the wall clock, `EXDATE`/`RDATE`/`RECURRENCE-ID`/`STATUS`/`DURATION`,
+  earliest-48 list) are in `main` too. **Steps 2-7 are done in the extended line only** (`feature/ideas`, option `agenda-rrule`, a sub-option of `agenda`, member of `extras`; the base stays as it is): libical vendored unmodified in
+  `components/libical` (re-vendor with `vendor.sh`, see its `UPSTREAM.md`; a `.clang-format` with `DisableFormat` keeps `make format-check` out of it), the adapter `main/calendar_rrule.c`, the engine wired into `calendar_ics.c`. Rolled
+  out as the pre-release `v219.0.1-rc2` of the extended repository (published 2026-10-10). The parallel comparison of old and new expansion (a debugging build) found no difference (4068 series on a PC, 110 on the frame), and after
+  that **the reader's own DAILY/WEEKLY expander was compiled out of the builds with `agenda-rrule`** (`parse_rrule()`, `gather_simple()`, the `BYDAY` check; the engine build gives the same events as before in 1236 windows). It stays in a
+  build with `agenda` only - the base project's - and in `host_tests/test_calendar_ics.cpp`; it can be deleted only if the base takes libical in as well. Numbers: +98,160 bytes of flash, about 16 KB of transient heap, a 2 MB feed 4.3 - 5.1 s on the
+  ESP32-S3 of which 2.0 s is reading the file (the proposed 2 s cannot be reached by any reader, see [CALENDAR_RRULE_ENGINE.md](CALENDAR_RRULE_ENGINE.md)). Rules that libical and python-dateutil read differently are refused on purpose (three families,
+  found by running random rules through both). The build with all options compiles and links for the M5Paper (ESP32) and the XIAO EE02 as well; it has not run on an M5Paper - there is no such device on hand. **Not done:** an acceptance
+  period of days with the option on real frames (only the Waveshare frame has run it, for hours); report problems with the *Hardware test report* issue template.
 
 ### Standing notes (not action items)
 
@@ -672,12 +697,13 @@ fix; the rest are standing notes, not work items.
 | `scripts/features.py`, `boards.py`, `check_capabilities.py`, `feature_matrix.py` | Feature registry, board tables, checks, compile matrix |
 | `scripts/verify_baseline.py`, `scripts/migrate/` | Equality proofs (`alloff_source.py`, `alloff_web.py`, `xref.py`), the per-feature-set check of the web sources (`web_bindings.py`), the one-off `gate.py` and its `maps/` |
 | `webapp/public/profile-editor.html`, `webapp/src/utils/agendaEngine.js`, `agendaEngineData.js`, `agendaEngine.scenes.js`, `agendaEngine.hashes.json`, `agendaEngine.test.js`; `scripts/gen_agenda_engine_data.py`, `gen_agenda_engine_hashes.py`, `sync_profile_editor.py` | The colour profile editor (`docs/PROFILE_EDITOR.md`): its preview is drawn by a JavaScript port of the Agenda renderer. `agendaEngine.js` is the port, `agendaEngineData.js` the firmware's font and icons as hex (from `font24.c` and `weather_icons_data.h`), `agendaEngine.scenes.js` the sample scenes of the host render harness, `agendaEngine.hashes.json` the SHA-256 of the pictures the real `agenda_renderer.c` draws for them; the test compares both the module and the copy inside the page. `sync_profile_editor.py` writes the engine into the page between its ENGINE markers (`--check`: a unit test). Keeping it in step: see the pitfall table |
+| `scripts/gen_sched_fixtures.py`, `sched_oracle.c`, `sched_oracle_shim.h` | Builds the firmware's scheduler (`main/cron.c`, `main/sched_pick.c`) into a test driver and writes `webapp/src/utils/schedPick.fixtures.json`, which `schedPick.test.js` compares the Web UI's JavaScript port (`schedPick.js`, the timeline of `docs/SCHEDULE_PAGES.md`) with. Run it again - and `npx prettier --write` on the JSON - whenever `sched_pick.c` or `cron.c` changes |
 | `webapp/src/utils/zonePick.js`, `cronText.js`, `repoLinks.js` (+ tests) | Web UI fixes that live in files of their own so the upstream components keep one fenced hook each (`FORK_FIXES`): the time zone name the picker shows (the choice made in the browser, then the zone people mean, then upstream's guess), the exact summary of a schedule rule (`*/45 * *` fires at :00 and :45), the repository link of the Updates tab (the frame reports `repo` in `GET /api/ota/status`; `WIKI_REPOS` lists the repositories whose wiki is linked) |
 | `scripts/generate_manifests.py`, `launch_demo.py` | Web flasher manifests, local demo server |
-| `scripts/test_*.py` | Tooling unit tests (67) |
+| `scripts/test_*.py` | Tooling unit tests (100) |
 | `webapp/` | Vue web UI; `feature-directives.js`, `vite.config.js`, `vite.config.demo.js`, `index-demo.html`, `src/` |
 | `process-cli/` | Host-side image processing tool (Node) |
-| `host_tests/` | GoogleTest host tests (339) |
+| `host_tests/` | GoogleTest host tests (1118) |
 | `demo/` | Tracked stubs (`.nojekyll`, `_headers`, `favicon.svg`); the rest is generated site output (gitignored) |
 | `.github/workflows/ci.yml`, `build.yml` | CI, builds, release, Pages deploy |
 | `docs/FEATURES.md` | User-facing feature list and OTA notes |

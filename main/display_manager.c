@@ -1425,3 +1425,17 @@ void display_manager_rotate_from_storage(void)
     album_manager_free_album_list(enabled_albums, album_count);
     ESP_LOGI(TAG, "Rotation complete");
 }
+
+#if FEATURE_ARTWORKS
+void display_manager_show_album_file(const char *path)
+{
+    // The same steps as the rotation above takes for a picture it chose: the overlays (here also
+    // the caption of the artworks mode), the panel, and the bookkeeping of what was shown
+    const char *shown = overlay_manager_apply(path);
+    display_manager_show_image(shown);
+    if (strcmp(shown, path) != 0) {
+        history_manager_mark_shown(path);
+    }
+    save_last_displayed_image(path);
+}
+#endif

@@ -1,0 +1,153 @@
+#ifndef INFO_SCREENS_CORE_H
+#define INFO_SCREENS_CORE_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <time.h>
+
+/**
+ * @file info_screens_core.h
+ * @brief The pure parts of the info screens (build option `info-screens`): the moment a screen is
+ * drawn for, ISO weeks and names of days and months in English and German, which screen is next in
+ * the rotation, and the parsing of the lists users type in. No ESP-IDF dependency, so the host
+ * tests and the render harness link it.
+ */
+
+// The moment a screen is drawn for, computed once by the caller.
+typedef struct {
+    bool german;           // the language of the text drawn on the screen (English otherwise)
+    int year, month, day;  // month 1-12
+    int wday;              // 0 = Sunday .. 6 = Saturday
+    int hour, minute;
+    int iso_year, iso_week;  // ISO 8601 week of the date (the week of a Thursday decides the year)
+} info_now_t;
+
+/** @brief Fills `out` from a broken-down local time. */
+void info_now_from_tm(const struct tm *local, bool german, info_now_t *out);
+
+/** @brief Fills `out` from a calendar date (noon), for tests and fixed previews. */
+void info_now_from_date(int year, int month, int day, bool german, info_now_t *out);
+
+/** @brief The ISO 8601 week of a date (1-53); `iso_year` receives the year that week belongs to. */
+int info_iso_week(int year, int month, int day, int *iso_year);
+
+/** @brief 0 = Sunday .. 6 = Saturday. */
+int info_weekday(int year, int month, int day);
+
+/**
+ * @brief Names of days and months as UTF-8 (the German ones with umlauts: "März"; pass them
+ * through canvas_text_from_utf8() to draw them). `wday` 0 = Sunday, `month` 1-12; "?" outside.
+ */
+const char *info_weekday_name(int wday, bool german);
+const char *info_weekday_short(int wday, bool german);
+const char *info_month_name(int month, bool german);
+
+/**
+ * @brief Whole days from one ISO date ("YYYY-MM-DD"; only the first ten characters count) to
+ * another: the time span a line chart covers. -1 if a date cannot be read or the second one is
+ * earlier.
+ */
+int info_days_between(const char *from_iso, const char *to_iso);
+
+/**
+ * @brief The small note at the foot of a page with data from the internet, saying when the data
+ * were fetched: "Updated 30 Sep 14:35", in German "Stand 30.09. 14:35". Plain ASCII. Returns false
+ * (and an empty string) if the clock was never set (a year before 2024), as a wrong time is worse
+ * than none.
+ */
+bool info_format_stamp(bool german, int year, int month, int day, int hour, int minute, char *out,
+                       size_t out_len);
+
+/** @brief info_format_stamp() for the moment of `now` (what pages whose data were fetched just now
+ * use). */
+bool info_format_stamp_now(const info_now_t *now, char *out, size_t out_len);
+
+/**
+ * @brief The span of a line chart as a short note: "42 d", in German "42 T" (Tage). An empty string
+ * for fewer than one day.
+ */
+void info_format_span(int days, bool german, char *out, size_t out_len);
+
+/**
+ * @brief info_format_stamp() without its word, for a foot line that also names the source:
+ * "30 Sep 14:35", in German "30.09. 14:35". Same rules (false and an empty string if the clock was
+ * never set).
+ */
+bool info_format_stamp_short(bool german, int year, int month, int day, int hour, int minute,
+                             char *out, size_t out_len);
+
+/** @brief info_format_stamp_short() for the moment of `now`. */
+bool info_format_stamp_short_now(const info_now_t *now, char *out, size_t out_len);
+
+// What a date in the header band is the date of
+typedef enum {
+    INFO_DAY_CLOSE = 0,  // the trading day of the newest price: "Close 30 Sep", "Schluss 30.09."
+    INFO_DAY_RATE = 1,   // the day of the newest reference rate: "Rates 30 Sep", "Kurse 30.09."
+} info_day_kind_t;
+
+/**
+ * @brief The date of the newest data point for the header band, named so that it cannot be taken
+ * for today's date: "Close 30 Sep" / "Schluss 30.09.". With `with_word` false only the date ("30
+ * Sep", "30.09.") - for a panel too narrow for the word. An empty string if the ISO date cannot be
+ * read.
+ */
+void info_format_day_label(info_day_kind_t kind, bool german, const char *iso_date, bool with_word,
+                           char *out, size_t out_len);
+
+/**
+ * @brief How many trading days the newest data point is behind: the weekdays (Monday to Friday)
+ * after `iso_date` up to and including today, less one when today is a weekday (its session may not
+ * have closed, so the price of the day before is not late). 0 for a price of today or of the last
+ * session before today (a Friday's on the weekend and on Monday); a Thursday's price on Monday or
+ * on Saturday is 1. Holidays are not known, so a day without trading can show as 1. -1 if the date
+ * cannot be read; 0 for a date in the future.
+ */
+int info_trading_days_behind(const char *iso_date, const info_now_t *now);
+
+#define INFO_SPAN_LABELS_MAX 5
+#define INFO_SPAN_LABEL_LEN 40
+
+/**
+ * @brief The notes that can stand beside a line chart, the most informative first, for the room
+ * there is: "29 T +10.2%", "29 T +10%", "+10.2%", "+10%", "29 T" (German; "29 d" in English). Only
+ * the span if `days` is under one, only the changes if `have_change` is false. The caller takes the
+ * first that fits. Returns how many were written.
+ */
+int info_span_labels(int days, bool have_change, float period_change_percent, bool german,
+                     char out[][INFO_SPAN_LABEL_LEN]);
+
+/**
+ * @brief The `counter`-th (counting from 0, wrapping) set bit of `mask`, looking at the lowest
+ * `bit_count` bits: which screen is next when the screens of the rotation are shown one after the
+ * other. -1 if no bit is set.
+ */
+int info_rotation_pick(uint32_t mask, uint32_t counter, int bit_count);
+
+/** @brief How many of the lowest `bit_count` bits of `mask` are set. */
+int info_rotation_size(uint32_t mask, int bit_count);
+
+/**
+ * @brief Which of a set of pages actually draw right now: compiled into this firmware, and - for a
+ * page a specific schedule was given (`stored_mask` comes from that schedule, not from the general
+ * "Information screens" tick list) - also currently ticked there, so a schedule cannot keep drawing
+ * a page the user has since switched off elsewhere. The Agenda bit is the one exception to the
+ * "also ticked" half of that: Agenda has no tick of its own (ToDo and Calendar each already have
+ * one, a third one for the combined page would only duplicate them and could disagree with both),
+ * so `ticked_mask` never governs it here. `stored_mask` still does - whether a schedule was given
+ * Agenda as one of its own pages (or, for the shared rotation, whether it is in the general list)
+ * still has to say so - but once it does, whether it can actually draw depends only on
+ * `agenda_has_content` (ToDo or Calendar is on), not on being separately ticked anywhere.
+ */
+uint32_t info_screens_effective_mask(uint32_t stored_mask, uint32_t compiled_mask,
+                                     uint32_t ticked_mask, bool agenda_has_content, int agenda_bit);
+
+/**
+ * @brief Splits a list typed by a user ("Anna, Ben; Clara" or one per line) into names: separators
+ * are `,` `;` and line breaks, names are trimmed, empty ones dropped, long ones cut to `name_len -
+ * 1` bytes without splitting a UTF-8 character. Returns how many names were written (at most
+ * `max`).
+ */
+int info_parse_list(const char *text, char *names, size_t name_len, int max);
+
+#endif

@@ -9,6 +9,9 @@
 #include "cron.h"
 #include "esp_err.h"
 #include "feature_config.h"
+#if FEATURE_RECIPES
+#include "recipe_source.h"
+#endif
 
 esp_err_t config_manager_init(void);
 
@@ -93,6 +96,16 @@ void config_manager_set_image_url(const char *url);
 const char *config_manager_get_image_url(void);
 
 void config_manager_set_ca_cert_der(const uint8_t *der, size_t len);
+#if CONFIG_FEATURE_HTTPS
+bool config_manager_has_ca_cert(void);
+// A private copy of the pin for a request, with the pin's generation at the
+// time. *out_len is the pin's length whether or not the copy succeeded:
+// NULL with 0 means nothing is pinned, NULL with a length means out of
+// memory. Caller frees.
+uint8_t *config_manager_copy_ca_cert_der(size_t *out_len, uint32_t *generation);
+// Clears the pin only if it is still the one `generation` was taken from.
+bool config_manager_clear_ca_cert_der_if_unchanged(uint32_t generation);
+#endif
 const uint8_t *config_manager_get_ca_cert_der(size_t *out_len);
 
 void config_manager_set_access_token(const char *token);
@@ -361,6 +374,16 @@ const char *config_manager_get_overlay_language(void);
 // default (captions keep the fixed black-bar/white-text look).
 void config_manager_set_caption_invert_colors_enabled(bool enabled);
 bool config_manager_get_caption_invert_colors_enabled(void);
+#if FEATURE_TEXT_OUTLINE
+// How the overlay lines and the captions are drawn (text_outline.h): the style as a number
+// (TEXT_STYLE_BAR, the default, TEXT_STYLE_WHITE, TEXT_STYLE_BLACK; anything else becomes the bar)
+// and the width of the border in pixels (clamped to 1..2, default 2). The captions follow the
+// style only while config_manager_get_caption_invert_colors_enabled() is on, like the colours.
+void config_manager_set_overlay_text_style(int style);
+int config_manager_get_overlay_text_style(void);
+void config_manager_set_overlay_text_border(int px);
+int config_manager_get_overlay_text_border(void);
+#endif
 // Telegram-only (see NVS_SHOW_EXIF_DATETIME_KEY in config.h for why). Off by
 // default.
 void config_manager_set_show_exif_datetime_enabled(bool enabled);
@@ -452,6 +475,166 @@ void config_manager_set_agenda_cal_e_url(const char *url);
 const char *config_manager_get_agenda_cal_e_url(void);
 void config_manager_set_agenda_cal_e_name(const char *name);
 const char *config_manager_get_agenda_cal_e_name(void);
+
+#if FEATURE_INFO_SCREENS
+// The information screens (info_screens.h): the mask of the screens in the rotation (bit 0 = the
+// agenda; default: only the agenda), the rotation counter, and the lists of the chore wheel
+// ("Anna, Ben" and "Bins, Dishes", as typed).
+uint32_t config_manager_get_info_screens_mask(void);
+void config_manager_set_info_screens_mask(uint32_t mask);
+uint32_t config_manager_get_info_screens_rotation(void);
+void config_manager_set_info_screens_rotation(uint32_t counter);
+#if FEATURE_SCHEDULE_PAGES
+// Pages per Agenda schedule (sched_pick.h): for each rule of the agenda schedule (index = the
+// schedule's number - 1) the mask of the pages it draws (0 = not assigned: the shared rotation) and
+// how long its display should stay in minutes (0 = the common gap), the common minimum time between
+// two displays, and a rotation counter per schedule.
+uint16_t config_manager_get_sched_mask(int index);
+uint16_t config_manager_get_sched_hold(int index);
+void config_manager_set_sched_pages(const uint16_t masks[MAX_CRON_RULES],
+                                    const uint16_t holds[MAX_CRON_RULES]);
+int config_manager_get_sched_gap(void);
+void config_manager_set_sched_gap(int minutes);
+uint16_t config_manager_get_sched_rotation(int index);
+void config_manager_set_sched_rotation(int index, uint16_t counter);
+// Whether any of the agenda schedules has pages assigned: only then the priorities, the gap and the
+// holds are in force; otherwise everything behaves as without this option.
+bool config_manager_sched_pages_in_use(void);
+#endif
+const char *config_manager_get_chore_members(void);
+void config_manager_set_chore_members(const char *text);
+const char *config_manager_get_chore_tasks(void);
+void config_manager_set_chore_tasks(const char *text);
+#if FEATURE_FINANCE_SNAPSHOT
+// The currencies of the exchange-rate page as typed ("USD, GBP, CHF"); empty = the default four.
+const char *config_manager_get_fx_currencies(void);
+void config_manager_set_fx_currencies(const char *text);
+#endif
+#if FEATURE_FUEL_PRICES
+// The fuel page (fuel_prices.h): the personal API key is write-only (never returned by the API,
+// only by the export that includes credentials), fuel type 0 E5 / 1 E10 / 2 diesel, radius 1-25 km,
+// 1-5 stations, and whether stations that are closed right now are left out.
+const char *config_manager_get_fuel_api_key(void);
+void config_manager_set_fuel_api_key(const char *key);
+int config_manager_get_fuel_type(void);
+void config_manager_set_fuel_type(int type);
+int config_manager_get_fuel_radius_km(void);
+void config_manager_set_fuel_radius_km(int km);
+int config_manager_get_fuel_count(void);
+void config_manager_set_fuel_count(int count);
+bool config_manager_get_fuel_hide_closed(void);
+void config_manager_set_fuel_hide_closed(bool hide);
+#endif
+#if FEATURE_ROUTE_TIME
+// The travel time on the fuel page (route_time.h). Two places: 0 = the start, 1 = the destination.
+bool config_manager_get_route_enabled(void);
+void config_manager_set_route_enabled(bool enabled);
+const char *config_manager_get_route_text(int which);  // as typed
+const char *config_manager_get_route_found(
+    int which);  // as the provider wrote the place ("" if none)
+// The coordinates of the place that was taken over; false if there is none.
+bool config_manager_get_route_point(int which, double *lat, double *lon);
+// A new text: the place found for the old one and the check are gone (the same text changes
+// nothing).
+void config_manager_set_route_text(int which, const char *text);
+// The place the user took over for `text`; the check is not touched here.
+void config_manager_set_route_place(int which, const char *text, const char *found, double lat,
+                                    double lon);
+// Both places taken over and the route between them calculated (set only after the check).
+bool config_manager_get_route_checked(void);
+void config_manager_set_route_checked(bool checked);
+int config_manager_get_route_ref(
+    int which);  // the usual time in minutes, 0 = none (0 there, 1 back)
+void config_manager_set_route_ref(int which, int minutes);
+int config_manager_get_route_percent(void);
+void config_manager_set_route_percent(int percent);
+int config_manager_get_route_min_excess(void);
+void config_manager_set_route_min_excess(int minutes);
+const char *config_manager_get_route_label(void);
+void config_manager_set_route_label(const char *label);
+// The personal keys are write-only: never returned by the API, only by the export with credentials.
+const char *config_manager_get_route_key_tomtom(void);
+void config_manager_set_route_key_tomtom(const char *key);
+const char *config_manager_get_route_key_here(void);
+void config_manager_set_route_key_here(const char *key);
+#endif
+#if FEATURE_RECIPES
+// The recipe page (recipe_source.h): what the user chose - the source, the filters, the picture and
+// the QR code. Reading gives the defaults (the recipe of the day, no filter) until something was
+// saved.
+void config_manager_get_recipe_options(recipe_options_t *out);
+// Brings the options into range (see recipe_options_sanitize()) and saves them.
+void config_manager_set_recipe_options(const recipe_options_t *options);
+// The personal key of TheMealDB is write-only: never returned by the API, only by the export with
+// credentials. Empty = the development key.
+const char *config_manager_get_recipe_mealdb_key(void);
+void config_manager_set_recipe_mealdb_key(const char *key);
+#endif
+#if FEATURE_MARKET_QUOTES
+// The markets page (market_quotes.h): the symbols as typed ("AAPL, EUNL.DE"; empty = the built-in
+// four), whether Yahoo Finance may be asked, the two personal API keys (write-only like the fuel
+// key: never returned by the API, only by the export that includes credentials) and the per-day
+// request counter of the quota-limited sources.
+const char *config_manager_get_market_symbols(void);
+void config_manager_set_market_symbols(const char *text);
+bool config_manager_get_market_yahoo(void);
+void config_manager_set_market_yahoo(bool enabled);
+const char *config_manager_get_market_key_twelvedata(void);
+void config_manager_set_market_key_twelvedata(const char *key);
+const char *config_manager_get_market_key_alphavantage(void);
+void config_manager_set_market_key_alphavantage(const char *key);
+const char *config_manager_get_market_quota(void);
+void config_manager_set_market_quota(const char *text);
+#endif
+#endif
+
+#if FEATURE_ARTWORKS
+// The artworks rotation mode (art_flow.h): the kinds of work and the sources that may be used (bit
+// masks, see art_select.h), the Smithsonian key (write-only like the fuel key: never returned by
+// the API, only by the export that includes credentials; empty = the public DEMO_KEY), whether
+// pictures are kept in the album and its name, the free space to keep and to clean up to (percent
+// of the storage; the pair is kept in range), the caption, and the counter that orders the saved
+// pictures.
+uint8_t config_manager_get_art_types(void);
+void config_manager_set_art_types(uint8_t mask);
+uint8_t config_manager_get_art_sources(void);
+void config_manager_set_art_sources(uint8_t mask);
+const char *config_manager_get_art_si_key(void);
+void config_manager_set_art_si_key(const char *key);
+bool config_manager_get_art_save(void);
+void config_manager_set_art_save(bool enabled);
+const char *config_manager_get_art_album(void);
+void config_manager_set_art_album(
+    const char *name);  // letters, digits, blank, '-' and '_'; others are ignored
+int config_manager_get_art_free_min(void);
+int config_manager_get_art_free_target(void);
+void config_manager_set_art_free_limits(int free_min_pct, int free_target_pct);
+bool config_manager_get_art_caption(void);
+void config_manager_set_art_caption(bool enabled);
+int config_manager_get_art_scale(void);  // an art_scale_t (art_select.h), fit by default
+void config_manager_set_art_scale(int scale);
+bool config_manager_get_art_match_orient(void);  // prefer pictures of the frame's orientation
+void config_manager_set_art_match_orient(bool enabled);
+uint32_t config_manager_next_art_seq(void);
+#endif
+
+#if FEATURE_UPLOAD_DEDUP
+// Duplicate detection at upload (dedup.h): mode 0 off / 1 skip / 2 warn, hash 0 stored bytes /
+// 1 decoded pixels, and whether images from before are indexed in the background.
+void config_manager_set_dedup_mode(int mode);
+int config_manager_get_dedup_mode(void);
+void config_manager_set_dedup_hash(int kind);
+int config_manager_get_dedup_hash(void);
+void config_manager_set_dedup_index_existing(bool on);
+bool config_manager_get_dedup_index_existing(void);
+#endif
+
+#if FEATURE_SOURCE_AUTH
+// May the login in a calendar/ToDo URL (https://user:password@host/...) also be sent over plain
+// http://? Default no - the fetch is refused instead (source_auth.h).
+void config_manager_set_source_auth_allow_http(bool allow);
+bool config_manager_get_source_auth_allow_http(void);
+#endif
 
 // Cached ETag validators for each source's conditional GET (see
 // AGENDA_TODO_CACHE_PATH etc. in config.h) - internal fetch-cache state,

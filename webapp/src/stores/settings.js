@@ -7,6 +7,18 @@ import {
   getDefaultParams,
 } from "@aitjcize/epaper-image-convert";
 import { validateTimezone } from "../utils/timezone";
+// #if FEATURE_MARKET_QUOTES
+import { isMarketKey } from "../utils/marketKey";
+// #endif
+// #if FEATURE_ARTWORKS
+import { isArtAlbumName, isArtKey } from "../utils/artKey";
+// #endif
+// #if FEATURE_ROUTE_TIME
+import { isRouteKey } from "../utils/routeKey";
+// #endif
+// #if FEATURE_RECIPES
+import { isMealDbKey } from "../utils/recipeKey";
+// #endif
 
 export const useSettingsStore = defineStore("settings", () => {
   const API_BASE = "";
@@ -133,6 +145,13 @@ export const useSettingsStore = defineStore("settings", () => {
     overlayEpdgzEnabled: false,
     overlayLanguage: "en",
     captionInvertColorsEnabled: false,
+// #if FEATURE_TEXT_OUTLINE
+    // The text of the overlays and captions without a bar (docs/TEXT_OUTLINE.md): the style
+    // ("bar", "white" = white text with a black border, "black" = black text with a white border)
+    // and the width of the border in pixels (1 or 2)
+    overlayTextStyle: "bar",
+    overlayTextBorder: 2,
+// #endif
     weatherMultilineEnabled: false,
     weatherIconSet: "none",
     weatherIconColored: false,
@@ -301,6 +320,112 @@ export const useSettingsStore = defineStore("settings", () => {
     agendaCalName: "",
     agendaCalName2: "",
     agendaCalDays: 2,
+// #endif
+// #if FEATURE_SOURCE_AUTH
+    sourceAuthAllowHttp: false,
+// #endif
+// #if FEATURE_INFO_SCREENS
+    // Information screens in the Agenda rotation (see docs/INFO_SCREENS.md)
+    infoScreens: ["agenda"],
+    infoScreensAvailable: ["agenda"],
+// #if FEATURE_ROUTE_TIME
+    // Travel time on the fuel page (see docs/ROUTE_TIME.md): the places as typed and as the provider
+    // wrote them once they were taken over, whether both were checked, the usual times there and back
+    // in minutes (0: none), the limits of a time that is too long, the label the display shows, and
+    // the keys (write-only: typed here, never loaded back)
+    routeEnabled: false,
+    routeFrom: "",
+    routeTo: "",
+    routeFromFound: "",
+    routeToFound: "",
+    routeChecked: false,
+    routeRefThereMin: 0,
+    routeRefBackMin: 0,
+    routePercent: 10,
+    routeMinExcessMin: 5,
+    routeLabel: "",
+    routeKeyTomtom: "",
+    routeKeyTomtomConfigured: false,
+    routeKeyHere: "",
+    routeKeyHereConfigured: false,
+// #endif
+// #if FEATURE_RECIPES
+    // The recipe page (see docs/RECIPES.md): the source, the filters (the names the frame uses; ""
+    // is no filter), the picture and the QR code; the key of TheMealDB is write-only
+    recipeSource: "day",
+    recipeVariant: "classic",
+    recipeQuery: "",
+    recipeProperty: "",
+    recipeHealth: "",
+    recipeCategory: "",
+    recipeCountry: "",
+    recipeMeal: "",
+    recipeMaxMinutes: 0,
+    recipeMinRating: 0,
+    recipeSort: "recommended",
+    recipeMealdbCategory: "",
+    recipeImage: true,
+    recipeQr: false,
+    recipeMealdbKey: "",
+    recipeMealdbKeyConfigured: false,
+// #endif
+// #if FEATURE_SCHEDULE_PAGES
+    // Pages per Agenda schedule (see docs/SCHEDULE_PAGES.md): per schedule the pages it draws
+    // (empty: the shared rotation) and its hold in minutes (0: the common minimum time between
+    // two displays, agendaGapMin)
+    agendaCronPages: [[]],
+    agendaCronHold: [0],
+    agendaGapMin: 15,
+// #endif
+// #if FEATURE_CHORE_WHEEL
+    choreMembers: "",
+    choreTasks: "",
+// #endif
+// #if FEATURE_FINANCE_SNAPSHOT
+    fxCurrencies: "",
+// #endif
+// #if FEATURE_FUEL_PRICES
+    // the key is write-only: typed here, never loaded back
+    fuelApiKey: "",
+    fuelApiKeyConfigured: false,
+    fuelType: "e10",
+    fuelRadiusKm: 5,
+    fuelCount: 5,
+    fuelHideClosed: true,
+// #endif
+// #if FEATURE_MARKET_QUOTES
+    marketSymbols: "",
+    marketYahoo: true,
+    // the keys are write-only: typed here, never loaded back
+    marketKeyTwelvedata: "",
+    marketKeyTwelvedataConfigured: false,
+    marketKeyAlphavantage: "",
+    marketKeyAlphavantageConfigured: false,
+// #endif
+// #endif
+// #if FEATURE_ARTWORKS
+    // Artworks rotation mode (see docs/ARTWORKS.md): bit masks of the kinds of work
+    // (1 painting, 2 drawing, 4 print) and of the sources (1 Rijksmuseum, 2 SMK, 4 Smithsonian)
+    artTypes: 7,
+    artSources: 7,
+    // the key is write-only: typed here, never loaded back
+    artSiKey: "",
+    artSiKeyConfigured: false,
+    artSave: true,
+    artAlbum: "Art",
+    artFreeMin: 20,
+    artFreeTarget: 30,
+    artCaption: true,
+    // how a picture is put on the panel ("fit": all of it, with bars; "cover": fills the panel,
+    // cuts the edges) and whether pictures of the frame's orientation are preferred
+    artScaleMode: "fit",
+    artMatchOrient: true,
+// #endif
+// #if FEATURE_UPLOAD_DEDUP
+    // Duplicate detection at upload (see docs/UPLOAD_DEDUP.md)
+    dedupMode: "skip",
+    dedupHash: "stored",
+    dedupIndexExisting: false,
 // #endif
 // #if FEATURE_OVERLAYS
     // Annotates each Calendar day divider with that day's forecast (reuses
@@ -489,6 +614,12 @@ export const useSettingsStore = defineStore("settings", () => {
     }
   }
 
+  // Whether the Image URL in the form is the one the frame has; the
+  // trust-certificate action acts on the saved one.
+  function isImageUrlSaved() {
+    return (deviceSettings.value.imageUrl || "") === (originalConfig.image_url || "");
+  }
+
   async function loadDeviceSettings() {
     try {
       const response = await fetch(`${API_BASE}/api/config`);
@@ -560,6 +691,14 @@ export const useSettingsStore = defineStore("settings", () => {
       deviceSettings.value.overlayEpdgzEnabled = data.overlay_epdgz_enabled === true;
       deviceSettings.value.overlayLanguage = data.overlay_language || "en";
       deviceSettings.value.captionInvertColorsEnabled = data.caption_invert_colors_enabled === true;
+// #if FEATURE_TEXT_OUTLINE
+      deviceSettings.value.overlayTextStyle = ["bar", "white", "black"].includes(
+        data.overlay_text_style
+      )
+        ? data.overlay_text_style
+        : "bar";
+      deviceSettings.value.overlayTextBorder = data.overlay_text_border === 1 ? 1 : 2;
+// #endif
       deviceSettings.value.weatherMultilineEnabled = data.weather_multiline_enabled === true;
       deviceSettings.value.weatherIconSet = data.weather_icon_set || "none";
       deviceSettings.value.weatherIconColored = data.weather_icon_colored === true;
@@ -653,6 +792,93 @@ export const useSettingsStore = defineStore("settings", () => {
       deviceSettings.value.agendaCalName2 = data.agenda_cal_name2 || "";
       deviceSettings.value.agendaCalDays = data.agenda_cal_days ?? 2;
 // #endif
+// #if FEATURE_SOURCE_AUTH
+      deviceSettings.value.sourceAuthAllowHttp = data.source_auth_allow_http === true;
+// #endif
+// #if FEATURE_INFO_SCREENS
+      deviceSettings.value.infoScreens = data.info_screens ?? ["agenda"];
+      deviceSettings.value.infoScreensAvailable = data.info_screens_available ?? ["agenda"];
+// #if FEATURE_ROUTE_TIME
+      deviceSettings.value.routeEnabled = data.route_enabled === true;
+      deviceSettings.value.routeFrom = data.route_from ?? "";
+      deviceSettings.value.routeTo = data.route_to ?? "";
+      deviceSettings.value.routeFromFound = data.route_from_found ?? "";
+      deviceSettings.value.routeToFound = data.route_to_found ?? "";
+      deviceSettings.value.routeChecked = data.route_checked === true;
+      deviceSettings.value.routeRefThereMin = data.route_ref_there_min ?? 0;
+      deviceSettings.value.routeRefBackMin = data.route_ref_back_min ?? 0;
+      deviceSettings.value.routePercent = data.route_percent ?? 10;
+      deviceSettings.value.routeMinExcessMin = data.route_min_excess_min ?? 5;
+      deviceSettings.value.routeLabel = data.route_label ?? "";
+      deviceSettings.value.routeKeyTomtomConfigured = data.route_key_tomtom_configured === true;
+      deviceSettings.value.routeKeyHereConfigured = data.route_key_here_configured === true;
+// #endif
+// #if FEATURE_RECIPES
+      deviceSettings.value.recipeSource = data.recipe_source ?? "day";
+      deviceSettings.value.recipeVariant = data.recipe_variant ?? "classic";
+      deviceSettings.value.recipeQuery = data.recipe_query ?? "";
+      deviceSettings.value.recipeProperty = data.recipe_property ?? "";
+      deviceSettings.value.recipeHealth = data.recipe_health ?? "";
+      deviceSettings.value.recipeCategory = data.recipe_category ?? "";
+      deviceSettings.value.recipeCountry = data.recipe_country ?? "";
+      deviceSettings.value.recipeMeal = data.recipe_meal ?? "";
+      deviceSettings.value.recipeMaxMinutes = data.recipe_max_minutes ?? 0;
+      deviceSettings.value.recipeMinRating = data.recipe_min_rating ?? 0;
+      deviceSettings.value.recipeSort = data.recipe_sort ?? "recommended";
+      deviceSettings.value.recipeMealdbCategory = data.recipe_mealdb_category ?? "";
+      deviceSettings.value.recipeImage = data.recipe_image !== false;
+      deviceSettings.value.recipeQr = data.recipe_qr === true;
+      deviceSettings.value.recipeMealdbKeyConfigured = data.recipe_mealdb_key_configured === true;
+// #endif
+// #if FEATURE_SCHEDULE_PAGES
+      deviceSettings.value.agendaCronPages = Array.isArray(data.agenda_cron_pages)
+        ? data.agenda_cron_pages
+        : [];
+      deviceSettings.value.agendaCronHold = Array.isArray(data.agenda_cron_hold)
+        ? data.agenda_cron_hold
+        : [];
+      deviceSettings.value.agendaGapMin = data.agenda_gap_min ?? 15;
+// #endif
+// #if FEATURE_CHORE_WHEEL
+      deviceSettings.value.choreMembers = data.chore_members || "";
+      deviceSettings.value.choreTasks = data.chore_tasks || "";
+// #endif
+// #if FEATURE_FINANCE_SNAPSHOT
+      deviceSettings.value.fxCurrencies = data.fx_currencies || "";
+// #endif
+// #if FEATURE_FUEL_PRICES
+      deviceSettings.value.fuelApiKeyConfigured = data.fuel_api_key_configured === true;
+      deviceSettings.value.fuelType = data.fuel_type || "e10";
+      deviceSettings.value.fuelRadiusKm = data.fuel_radius_km ?? 5;
+      deviceSettings.value.fuelCount = data.fuel_count ?? 5;
+      deviceSettings.value.fuelHideClosed = data.fuel_hide_closed !== false;
+// #endif
+// #if FEATURE_MARKET_QUOTES
+      deviceSettings.value.marketSymbols = data.market_symbols || "";
+      deviceSettings.value.marketYahoo = data.market_yahoo !== false;
+      deviceSettings.value.marketKeyTwelvedataConfigured =
+        data.market_key_twelvedata_configured === true;
+      deviceSettings.value.marketKeyAlphavantageConfigured =
+        data.market_key_alphavantage_configured === true;
+// #endif
+// #endif
+// #if FEATURE_ARTWORKS
+      deviceSettings.value.artTypes = data.art_types ?? 7;
+      deviceSettings.value.artSources = data.art_sources ?? 7;
+      deviceSettings.value.artSiKeyConfigured = data.art_si_key_configured === true;
+      deviceSettings.value.artSave = data.art_save !== false;
+      deviceSettings.value.artAlbum = data.art_album || "Art";
+      deviceSettings.value.artFreeMin = data.art_free_min ?? 20;
+      deviceSettings.value.artFreeTarget = data.art_free_target ?? 30;
+      deviceSettings.value.artCaption = data.art_caption !== false;
+      deviceSettings.value.artScaleMode = data.art_scale_mode === "cover" ? "cover" : "fit";
+      deviceSettings.value.artMatchOrient = data.art_match_orient !== false;
+// #endif
+// #if FEATURE_UPLOAD_DEDUP
+      deviceSettings.value.dedupMode = data.dedup_mode ?? "skip";
+      deviceSettings.value.dedupHash = data.dedup_hash ?? "stored";
+      deviceSettings.value.dedupIndexExisting = data.dedup_index_existing === true;
+// #endif
 // #if FEATURE_OVERLAYS
       deviceSettings.value.agendaCalWeatherEnabled = data.agenda_cal_weather_enabled === true;
       deviceSettings.value.agendaCalWeatherRightAligned =
@@ -711,7 +937,8 @@ export const useSettingsStore = defineStore("settings", () => {
       deviceSettings.value.sdRotationMode = data.sd_rotation_mode || "random";
 // #if FEATURE_TELEGRAM
       // Write-only: GET /api/config never returns the real values, only
-      // whether each is set - keep the inputs blank.
+      // whether each is set (like fuel_api_key etc. further down) - keep
+      // the inputs blank.
       deviceSettings.value.telegramBotToken = "";
       deviceSettings.value.telegramChatId = "";
       deviceSettings.value.telegramBotTokenConfigured = data.telegram_bot_token_configured === true;
@@ -827,6 +1054,10 @@ export const useSettingsStore = defineStore("settings", () => {
       overlay_epdgz_enabled: deviceSettings.value.overlayEpdgzEnabled,
       overlay_language: deviceSettings.value.overlayLanguage,
       caption_invert_colors_enabled: deviceSettings.value.captionInvertColorsEnabled,
+// #if FEATURE_TEXT_OUTLINE
+      overlay_text_style: deviceSettings.value.overlayTextStyle,
+      overlay_text_border: deviceSettings.value.overlayTextBorder,
+// #endif
       weather_multiline_enabled: deviceSettings.value.weatherMultilineEnabled,
       weather_icon_set: deviceSettings.value.weatherIconSet,
       weather_icon_colored: deviceSettings.value.weatherIconColored,
@@ -900,6 +1131,103 @@ export const useSettingsStore = defineStore("settings", () => {
       agenda_cal_name: deviceSettings.value.agendaCalName,
       agenda_cal_name2: deviceSettings.value.agendaCalName2,
       agenda_cal_days: deviceSettings.value.agendaCalDays,
+// #endif
+// #if FEATURE_SOURCE_AUTH
+      source_auth_allow_http: deviceSettings.value.sourceAuthAllowHttp,
+// #endif
+// #if FEATURE_INFO_SCREENS
+      info_screens: deviceSettings.value.infoScreens,
+// #if FEATURE_ROUTE_TIME
+      route_enabled: deviceSettings.value.routeEnabled,
+      route_from: deviceSettings.value.routeFrom,
+      route_to: deviceSettings.value.routeTo,
+      route_ref_there_min: deviceSettings.value.routeRefThereMin,
+      route_ref_back_min: deviceSettings.value.routeRefBackMin,
+      route_percent: deviceSettings.value.routePercent,
+      route_min_excess_min: deviceSettings.value.routeMinExcessMin,
+      route_label: deviceSettings.value.routeLabel,
+      // write-only: sent only when something valid was typed (an empty value means "not touched")
+      ...(isRouteKey(deviceSettings.value.routeKeyTomtom)
+        ? { route_key_tomtom: deviceSettings.value.routeKeyTomtom }
+        : {}),
+      ...(isRouteKey(deviceSettings.value.routeKeyHere)
+        ? { route_key_here: deviceSettings.value.routeKeyHere }
+        : {}),
+// #endif
+// #if FEATURE_RECIPES
+      recipe_source: deviceSettings.value.recipeSource,
+      recipe_variant: deviceSettings.value.recipeVariant,
+      recipe_query: deviceSettings.value.recipeQuery,
+      recipe_property: deviceSettings.value.recipeProperty,
+      recipe_health: deviceSettings.value.recipeHealth,
+      recipe_category: deviceSettings.value.recipeCategory,
+      recipe_country: deviceSettings.value.recipeCountry,
+      recipe_meal: deviceSettings.value.recipeMeal,
+      recipe_max_minutes: deviceSettings.value.recipeMaxMinutes,
+      recipe_min_rating: deviceSettings.value.recipeMinRating,
+      recipe_sort: deviceSettings.value.recipeSort,
+      recipe_mealdb_category: deviceSettings.value.recipeMealdbCategory,
+      recipe_image: deviceSettings.value.recipeImage,
+      recipe_qr: deviceSettings.value.recipeQr,
+      // write-only: sent only when something valid was typed (an empty value means "not touched")
+      ...(isMealDbKey(deviceSettings.value.recipeMealdbKey)
+        ? { recipe_mealdb_key: deviceSettings.value.recipeMealdbKey }
+        : {}),
+// #endif
+// #if FEATURE_SCHEDULE_PAGES
+      agenda_cron_pages: deviceSettings.value.agendaCronPages,
+      agenda_cron_hold: deviceSettings.value.agendaCronHold,
+      agenda_gap_min: deviceSettings.value.agendaGapMin,
+// #endif
+// #if FEATURE_CHORE_WHEEL
+      chore_members: deviceSettings.value.choreMembers,
+      chore_tasks: deviceSettings.value.choreTasks,
+// #endif
+// #if FEATURE_FINANCE_SNAPSHOT
+      fx_currencies: deviceSettings.value.fxCurrencies,
+// #endif
+// #if FEATURE_FUEL_PRICES
+      fuel_type: deviceSettings.value.fuelType,
+      fuel_radius_km: deviceSettings.value.fuelRadiusKm,
+      fuel_count: deviceSettings.value.fuelCount,
+      fuel_hide_closed: deviceSettings.value.fuelHideClosed,
+      // write-only: sent only when something was typed (an empty value means "not touched")
+      ...(deviceSettings.value.fuelApiKey ? { fuel_api_key: deviceSettings.value.fuelApiKey } : {}),
+// #endif
+// #if FEATURE_MARKET_QUOTES
+      market_symbols: deviceSettings.value.marketSymbols,
+      market_yahoo: deviceSettings.value.marketYahoo,
+      // write-only: sent only when something valid was typed (an empty value means "not touched")
+      ...(isMarketKey(deviceSettings.value.marketKeyTwelvedata)
+        ? { market_key_twelvedata: deviceSettings.value.marketKeyTwelvedata }
+        : {}),
+      ...(isMarketKey(deviceSettings.value.marketKeyAlphavantage)
+        ? { market_key_alphavantage: deviceSettings.value.marketKeyAlphavantage }
+        : {}),
+// #endif
+// #endif
+// #if FEATURE_ARTWORKS
+      art_types: deviceSettings.value.artTypes,
+      art_sources: deviceSettings.value.artSources,
+      art_save: deviceSettings.value.artSave,
+      // a name the frame would refuse is not sent
+      ...(isArtAlbumName(deviceSettings.value.artAlbum)
+        ? { art_album: deviceSettings.value.artAlbum }
+        : {}),
+      art_free_min: deviceSettings.value.artFreeMin,
+      art_free_target: deviceSettings.value.artFreeTarget,
+      art_caption: deviceSettings.value.artCaption,
+      art_scale_mode: deviceSettings.value.artScaleMode,
+      art_match_orient: deviceSettings.value.artMatchOrient,
+      // write-only: sent only when something valid was typed (an empty value means "not touched")
+      ...(isArtKey(deviceSettings.value.artSiKey)
+        ? { art_si_key: deviceSettings.value.artSiKey }
+        : {}),
+// #endif
+// #if FEATURE_UPLOAD_DEDUP
+      dedup_mode: deviceSettings.value.dedupMode,
+      dedup_hash: deviceSettings.value.dedupHash,
+      dedup_index_existing: deviceSettings.value.dedupIndexExisting,
 // #endif
 // #if FEATURE_OVERLAYS
       agenda_cal_weather_enabled: deviceSettings.value.agendaCalWeatherEnabled,
@@ -1279,6 +1607,7 @@ export const useSettingsStore = defineStore("settings", () => {
     applyGrayscaleDefaultIfUntouched,
     loadSettings,
     loadDeviceSettings,
+    isImageUrlSaved,
     saveDeviceSettings,
 
     loadPalette,

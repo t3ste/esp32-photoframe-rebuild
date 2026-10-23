@@ -18,6 +18,15 @@ void display_manager_rotate_from_storage(void);
 const char *display_manager_get_current_image(void);
 void display_manager_initialize_paint(void);
 
+#if FEATURE_ARTWORKS
+/**
+ * @brief Shows one picture of an album (a display-ready .png/.epdgz/.bmp file) the way the rotation
+ * shows the one it chose: the overlays (and the caption of the artworks mode), the panel, and the
+ * bookkeeping of what was shown.
+ */
+void display_manager_show_album_file(const char *path);
+#endif
+
 #if FEATURE_FACECROP
 /**
  * @brief Whether a matched album file should be treated as its own logical
