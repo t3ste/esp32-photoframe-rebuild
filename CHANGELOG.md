@@ -23,7 +23,22 @@ has a 2.19 and it is merged in: `v219.0.0`, then `v219.0.1`, ...).
   white (255,255,255) after resize/rotate are marked in a per-row mask before CDR brightness compression and
   error-diffusion dithering. Marked pixels output the exact panel white directly, so no colored Sprenkel appear in
   large white areas. Near-white pixels and all other colors are processed normally; GC16 mode is unaffected. Only
-  exact white (not "near-white") is protected, so mid-tones stay unchanged.
+  exact white (not "near-white") is protected, so mid-tones stay unchanged. Fork of upstream
+  [PR #140](https://github.com/aitjcize/esp32-photoframe/pull/140) ("Preserve solid white areas during on-device
+  dithering"), not yet merged upstream; gated behind `FORK_FIXES` / `CONFIG_FORK_FIXES` so the code is upstream's
+  exactly with every feature off.
+
+### Added
+
+- **Climate sensor readings in HTTP headers** (`main/utils.c`, `climate` option): the image fetch that rotates the URL
+  now also sends `X-Temperature` and `X-Humidity` headers alongside the existing `X-Battery-Percentage`, so a server
+  collecting the frame's telemetry can also track temperature and humidity. Only boards that report a climate sensor
+  (`board_hal_get_temperature()` / `board_hal_get_humidity()` return `ESP_OK`) send the headers; boards without one
+  omit them entirely. Gated behind `FEATURE_CLIMATE` / `CONFIG_FEATURE_CLIMATE`, which itself depends on
+  `FORK_HW_CLIMATE_SENSOR` (SHTC3 / SHT40 / SHT3X). Fork of upstream
+  [Issue #157](https://github.com/aitjcize/esp32-photoframe/issues/157) ("include the e-paper device's sensor readings
+  in the HTTP request headers"). **Not tested on real hardware:** no Home Assistant installation is available to
+  receive and display the headers; only the Waveshare board is on hand, which has no climate sensor.
 
 ## [v219.0.5] - 2026-10-23
 
