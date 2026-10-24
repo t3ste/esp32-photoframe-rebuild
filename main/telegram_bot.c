@@ -1479,14 +1479,13 @@ esp_err_t telegram_bot_notify_fallback_image(const char *image_path)
             return ESP_FAIL;
         }
     }
-}
 
-const char *fname = strrchr(image_path, '/');
-fname = fname ? fname + 1 : image_path;
-char caption[192];
-snprintf(caption, sizeof(caption), "[i] Auto-rotate (no new Telegram image): %.100s", fname);
+    const char *fname = strrchr(image_path, '/');
+    fname = fname ? fname + 1 : image_path;
+    char caption[192];
+    snprintf(caption, sizeof(caption), "[i] Auto-rotate (no new Telegram image): %.100s", fname);
 
-return telegram_bot_send_photo_file(send_path, caption);
+    return telegram_bot_send_photo_file(send_path, caption);
 }
 
 // Reads just enough of a file to determine its pixel dimensions (bounded

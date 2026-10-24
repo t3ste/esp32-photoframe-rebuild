@@ -32,10 +32,10 @@ def full_clean(build_dir=DEFAULT_BUILD_DIR):
     for f in ["sdkconfig", "partitions.csv"]:
         if build_dir == DEFAULT_BUILD_DIR and os.path.exists(f):
             os.remove(f)
-            print(f"  ✓ Removed {f}")
+            print(f"  + Removed {f}")
     if os.path.isdir(build_dir):
         shutil.rmtree(build_dir)
-        print(f"  ✓ Removed {build_dir}/")
+        print(f"  + Removed {build_dir}/")
 
 
 def read_build_state(build_dir=DEFAULT_BUILD_DIR):
@@ -71,11 +71,11 @@ def build_webapp(enabled_features):
             subprocess.run("npm install", shell=True, check=True, cwd="webapp")
         subprocess.run("npm run build", shell=True, check=True, cwd="webapp", env=env)
     except subprocess.CalledProcessError as e:
-        print(f"  ✗ Webapp build failed with exit code {e.returncode}")
+        print(f"  * Webapp build failed with exit code {e.returncode}")
         sys.exit(e.returncode)
     except FileNotFoundError:
         print(
-            "  ✗ 'npm' not found. Please ensure Node.js is installed and in your PATH."
+            "  * 'npm' not found. Please ensure Node.js is installed and in your PATH."
         )
         sys.exit(1)
 
@@ -103,7 +103,7 @@ def generate_splash(board):
         try:
             subprocess.run("npm ci", shell=True, check=True, cwd=process_cli_dir)
         except subprocess.CalledProcessError as e:
-            print(f"  ✗ npm ci failed in process-cli with exit code {e.returncode}")
+            print(f"  * npm ci failed in process-cli with exit code {e.returncode}")
             sys.exit(e.returncode)
 
     try:
@@ -112,7 +112,7 @@ def generate_splash(board):
             check=True,
         )
     except subprocess.CalledProcessError as e:
-        print(f"  ✗ Splash generation failed with exit code {e.returncode}")
+        print(f"  * Splash generation failed with exit code {e.returncode}")
         sys.exit(e.returncode)
 
 
