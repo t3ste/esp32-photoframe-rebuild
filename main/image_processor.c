@@ -895,6 +895,7 @@ static esp_err_t run_stream_row(geometry_t *geo, cdr_state_t *cdr, dither_state_
                 s_white_mask[x] = 1;
             }
         }
+    }
 #endif
     cdr_apply_row(cdr, row, geo->out_w);
     dither_row(dither, row);
@@ -1892,7 +1893,8 @@ static esp_err_t jpg_stream_run(const char *path, dither_algorithm_t dither_algo
                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     ctx.out_row = (uint8_t *) heap_caps_malloc((size_t) ctx.geo.out_w * 3, MALLOC_CAP_SPIRAM);
 #if CONFIG_FORK_FIXES
-    ctx.white_mask = (uint8_t *) heap_caps_calloc(ctx.geo.out_w, sizeof(uint8_t), MALLOC_CAP_SPIRAM);
+    ctx.white_mask =
+        (uint8_t *) heap_caps_calloc(ctx.geo.out_w, sizeof(uint8_t), MALLOC_CAP_SPIRAM);
     if (!ctx.white_mask) {
         ESP_LOGE(TAG, "Failed to allocate JPG white mask buffer");
         heap_caps_free(ctx.ring);
