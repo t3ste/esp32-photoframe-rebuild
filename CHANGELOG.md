@@ -37,8 +37,8 @@ has a 2.19 and it is merged in: `v219.0.0`, then `v219.0.1`, ...).
   omit them entirely. Gated behind `FEATURE_CLIMATE` / `CONFIG_FEATURE_CLIMATE`, which itself depends on
   `FORK_HW_CLIMATE_SENSOR` (SHTC3 / SHT40 / SHT3X). Fork of upstream
   [Issue #157](https://github.com/aitjcize/esp32-photoframe/issues/157) ("include the e-paper device's sensor readings
-  in the HTTP request headers"). **Not tested on real hardware:** no Home Assistant installation is available to
-  receive and display the headers; only the Waveshare board is on hand, which has no climate sensor.
+  in the HTTP request headers"). **Not tested with a Home Assistant installation yet** (none available to receive and
+  display the headers); the Waveshare PhotoPainter 7.3" does have an SHTC3 climate sensor.
 
 ## [v219.0.5] - 2026-10-23
 

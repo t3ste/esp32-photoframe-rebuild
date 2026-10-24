@@ -114,9 +114,9 @@ included), the 8 KiB cap of the settings POSTs, the lock around the enabled-albu
   `FORK_HW_CLIMATE_SENSOR` (SHTC3 / SHT40 / SHT3X). Fork of upstream
   [Issue #157](https://github.com/aitjcize/esp32-photoframe/issues/157)
   ("include the e-paper device's sensor readings in the HTTP request headers").
-  **Not tested on real hardware:** no Home Assistant installation is available to
-  receive and display the headers; only the Waveshare board is on hand, which has no
-  climate sensor.
+  **Not tested with a Home Assistant installation yet** (none available to receive and
+  display the headers); the Waveshare PhotoPainter 7.3" does have an SHTC3 climate
+  sensor, so the feature is exercised by the board's own hardware.
 
 None of this changes behavior with the flag off - `fixes` exists because upstream's own review cadence is slow,
 and holding every one of these behind a single flag keeps them easy to build (or skip) as one unit while the

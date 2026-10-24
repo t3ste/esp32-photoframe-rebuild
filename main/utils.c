@@ -2178,8 +2178,8 @@ static esp_err_t fetch_perform_download(const char *url, bool *not_modified, ima
         // temperature and humidity.  board_hal_get_temperature() /
         // board_hal_get_humidity() answer ESP_ERR_NOT_SUPPORTED on boards
         // without a sensor, in which case the header is simply omitted.
-        // Not tested on real hardware yet: no Home Assistant installation
-        // available, only the Waveshare board is on hand
+        // Not tested with a Home Assistant installation yet (none available);
+        // the Waveshare PhotoPainter 7.3" does have an SHTC3 climate sensor
         // (see https://github.com/aitjcize/esp32-photoframe/issues/157).
         float temp_c, humidity;
         if (board_hal_get_temperature(&temp_c) == ESP_OK) {
