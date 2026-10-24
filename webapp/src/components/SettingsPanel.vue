@@ -3039,15 +3039,15 @@ async function performFactoryReset() {
                       v-model="settingsStore.deviceSettings.telegramRotationNotifyFormat"
                       :items="[
                         {
-                          title: 'Thumbnail (always generate)',
+                          title: 'Thumbnail (reuse gallery thumbnail, else generate)',
                           value: 'thumbnail',
                         },
                         {
-                          title: 'Original if possible (JPG/PNG/BMP direct, else thumbnail)',
+                          title: 'Original file (send directly if decodable)',
                           value: 'original',
                         },
                         {
-                          title: 'EPDGZ (always, if available)',
+                          title: 'EPDGZ file (raw, Telegram can\'t decode)',
                           value: 'epdgz',
                         },
                       ]"
@@ -3059,11 +3059,13 @@ async function performFactoryReset() {
                     />
                     <div class="text-caption text-medium-emphasis mb-4">
                       What to send to Telegram when auto-rotation shows a new image and rotation
-                      notify is on. "Thumbnail" generates a small preview from any source.
-                      "Original if possible" sends the album file directly when it is a format
-                      Telegram can decode (JPG/PNG/BMP) and falls back to a thumbnail otherwise.
-                      "EPDGZ" sends the original EPDGZ file as-is - Telegram cannot decode EPDGZ,
-                      so this will fail for EPDGZ sources.
+                      notify is on. "Thumbnail" reuses an existing gallery thumbnail if one exists,
+                      otherwise generates one on demand. "Original file" sends the album file directly
+                      when Telegram can decode it (JPG/PNG/BMP) and falls back to a thumbnail
+                      otherwise. "EPDGZ file" sends the original EPDGZ file as-is - Telegram cannot
+                      decode EPDGZ, so this will fail for EPDGZ sources. If an overlay (weather,
+                      headlines, captions) was drawn on top of the photo before display, the
+                      original album image filename is shown in the caption with "[overlay: yes]".
                     </div>
 
                     <v-switch

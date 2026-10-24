@@ -41,15 +41,16 @@ has a 2.19 and it is merged in: `v219.0.0`, then `v219.0.1`, ...).
   display the headers); the Waveshare PhotoPainter 7.3" does have an SHTC3 climate sensor.
 
 - **Rotation notify image source** (`main/telegram_bot.c`, `main/utils.c`, `main/display_manager.c`, `main/display_manager.h`, Web UI): new setting "Rotation notify image"
-  (Web UI: Settings -> Telegram) with three modes: "Thumbnail" (always generate and send a scaled thumbnail, the
-  historical behavior), "Original if possible" (send the album file directly when it is a format Telegram can decode
-  - JPG/PNG/BMP - and fall back to a thumbnail otherwise), and "EPDGZ" (send the original EPDGZ file as-is; Telegram
+  (Web UI: Settings -> Telegram) with three modes: "Thumbnail (reuse gallery thumbnail, else generate)" (always generate and send a scaled thumbnail, the
+  historical behavior), "Original file (send directly if decodable)" (send the album file directly when it is a format Telegram can decode
+  - JPG/PNG/BMP - and fall back to a thumbnail otherwise), and "EPDGZ file (raw, Telegram can't decode)" (send the original EPDGZ file as-is; Telegram
   cannot decode EPDGZ, so this fails for EPDGZ sources). Defaults to "Thumbnail". Gated behind
   `FEATURE_TELEGRAM` / `CONFIG_FEATURE_TELEGRAM`, stored in NVS as `tg_rn_fmt`. Before generating a new thumbnail,
   any pre-existing sidecar thumbnail (same base name as the source image before overlay was applied, with `.jpg`
   extension - e.g. one already rendered for the Web UI gallery) is reused instead of regenerating. The image sent to
   Telegram always matches the source image that was shown on the ePaper display (same base filename), not an
-  overlay scratch copy (`.overlay.png` / `.overlay.epdgz`). New accessor `display_manager_get_last_displayed_image()`
+  overlay scratch copy (`.overlay.png` / `.overlay.epdgz`). The caption includes the original album filename and an
+  `[overlay: yes]` hint when an overlay was applied. New accessor `display_manager_get_last_displayed_image()`
   returns the canonical source path recorded before the overlay was applied.
 
 ## [v219.0.5] - 2026-10-23

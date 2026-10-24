@@ -1488,10 +1488,17 @@ esp_err_t telegram_bot_notify_fallback_image(const char *image_path)
         }
     }
 
-    const char *fname = strrchr(image_path, '/');
-    fname = fname ? fname + 1 : image_path;
-    char caption[192];
-    snprintf(caption, sizeof(caption), "[i] Auto-rotate (no new Telegram image): %.100s", fname);
+    // Determine the display filename for the Telegram caption: prefer the
+    // original album base name over the overlay scratch copy path so the
+    // recipient sees the actual photo filename, not a synthetic .overlay.*
+    // scratch name. Also record whether an overlay scratch copy was involved.
+    bool overlay_active = (source_path != image_path && strcmp(source_path, image_path) != 0);
+    const char *display_fname = source_path ? source_path : image_path;
+    const char *dname = strrchr(display_fname, '/');
+    dname = dname ? dname + 1 : display_fname;
+    char caption[224];
+    snprintf(caption, sizeof(caption), "[i] Auto-rotate (no new Telegram image): %.100s%s", dname,
+             overlay_active ? "  [overlay: yes]" : "");
 
     return telegram_bot_send_photo_file(send_path, caption);
 }
