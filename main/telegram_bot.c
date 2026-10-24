@@ -1421,31 +1421,42 @@ esp_err_t telegram_bot_notify_fallback_image(const char *image_path)
 
     const char *rn_format = config_manager_get_telegram_rotation_notify_format();
 
-    char thumb_path[320];
-    strncpy(thumb_path, image_path, sizeof(thumb_path) - 1);
-    thumb_path[sizeof(thumb_path) - 1] = '\0';
-    char *ext = strrchr(thumb_path, '.');
+    // The image currently shown on the panel may be an overlay scratch copy
+    // (.overlay.png / .overlay.epdgz) rather than the real album file when
+    // weather/headlines/captions are drawn on top. Use the canonical source
+    // path (recorded before the overlay was applied) for thumbnail lookup so
+    // we find the existing gallery thumbnail instead of sending a synthetic
+    // overlay file that Telegram can't decode.
+    const char *source_path = display_manager_get_last_displayed_image();
+    if (!source_path || source_path[0] == '\0') {
+        source_path = image_path;
+    }
+
+    char source_thumb_path[320];
+    strncpy(source_thumb_path, source_path, sizeof(source_thumb_path) - 1);
+    source_thumb_path[sizeof(source_thumb_path) - 1] = '\0';
+    char *source_ext = strrchr(source_thumb_path, '.');
     const char *send_path = NULL;
 
-    // Build the canonical thumbnail sidecar path: same directory and base name
-    // as the displayed image, but with .jpg extension. This matches what the
-    // Web UI gallery generates (see display_flow.c / http_server.c) - the
-    // .jpg sibling of the displayed image is its gallery thumbnail.
-    if (ext) {
-        strcpy(ext, ".jpg");
+    // 1) Reuse any pre-existing sidecar thumbnail (.jpg) of the source image,
+    //    e.g. one already rendered for the Web UI gallery.
+    if (source_ext) {
+        strcpy(source_ext, ".jpg");
         struct stat st;
-        if (strcmp(thumb_path, image_path) != 0 && stat(thumb_path, &st) == 0) {
-            send_path = thumb_path;
+        if (strcmp(source_thumb_path, source_path) != 0 && stat(source_thumb_path, &st) == 0) {
+            send_path = source_thumb_path;
         }
     }
 
-    // If no pre-existing thumbnail sidecar was found, handle per format:
+    // 2) If no sidecar thumbnail exists, handle per mode.
     if (!send_path) {
         if (strcmp(rn_format, TELEGRAM_ROTATE_NOTIFY_FORMAT_ORIGINAL) == 0) {
             // "Original if possible": send the album file directly if Telegram
             // can decode it (JPG/PNG/BMP); otherwise fall back to thumbnail.
-            if (ext && (strcasecmp(ext, ".jpg") == 0 || strcasecmp(ext, ".jpeg") == 0 ||
-                        strcasecmp(ext, ".png") == 0 || strcasecmp(ext, ".bmp") == 0)) {
+            char *image_ext = strrchr(image_path, '.');
+            if (image_ext &&
+                (strcasecmp(image_ext, ".jpg") == 0 || strcasecmp(image_ext, ".jpeg") == 0 ||
+                 strcasecmp(image_ext, ".png") == 0 || strcasecmp(image_ext, ".bmp") == 0)) {
                 struct stat st;
                 if (stat(image_path, &st) == 0) {
                     send_path = image_path;
@@ -1455,7 +1466,8 @@ esp_err_t telegram_bot_notify_fallback_image(const char *image_path)
             // "EPDGZ": send the original file as-is. Telegram cannot decode
             // EPDGZ (this project's palette-indexed/gzip format), so this
             // will fail with IMAGE_PROCESS_FAILED - offered for completeness.
-            if (ext && strcasecmp(ext, ".epdgz") == 0) {
+            char *image_ext = strrchr(image_path, '.');
+            if (image_ext && strcasecmp(image_ext, ".epdgz") == 0) {
                 struct stat st;
                 if (stat(image_path, &st) == 0) {
                     send_path = image_path;
@@ -1463,7 +1475,7 @@ esp_err_t telegram_bot_notify_fallback_image(const char *image_path)
             }
         }
 
-        // Last resort: generate a thumbnail on demand.
+        // 3) Last resort: generate a thumbnail on demand from the displayed image.
         if (!send_path) {
             if (image_processor_make_thumbnail(image_path, TELEGRAM_THUMBNAIL_MAX_DIMENSION,
                                                TELEGRAM_NOTIFY_THUMB_PATH) == ESP_OK) {
