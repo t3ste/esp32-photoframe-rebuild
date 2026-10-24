@@ -1296,7 +1296,7 @@ static void finalize_telegram_image(char *path, size_t path_len, const char *arc
 // bytes Telegram has never seen (e.g. a locally generated thumbnail). Kept
 // to small files (thumbnails) - buffers the whole multipart body in SPIRAM
 // rather than streaming, which keeps this simple and is fine at that size.
-static esp_err_t telegram_bot_send_photo_file(const char *file_path, const char *caption)
+esp_err_t telegram_bot_send_photo_file(const char *file_path, const char *caption)
 {
     if (!config_manager_telegram_is_configured() || !file_path) {
         return ESP_ERR_INVALID_STATE;
@@ -1419,19 +1419,56 @@ esp_err_t telegram_bot_notify_fallback_image(const char *image_path)
         return ESP_ERR_INVALID_ARG;
     }
 
+    const char *rn_format = config_manager_get_telegram_rotation_notify_format();
+
     char thumb_path[320];
     strncpy(thumb_path, image_path, sizeof(thumb_path) - 1);
     thumb_path[sizeof(thumb_path) - 1] = '\0';
     char *ext = strrchr(thumb_path, '.');
     const char *send_path = NULL;
-    if (ext && (size_t) (ext - thumb_path) + 4 < sizeof(thumb_path)) {
-        strcpy(ext, ".jpg");
-        struct stat st;
-        if (strcmp(thumb_path, image_path) != 0 && stat(thumb_path, &st) == 0) {
-            send_path = thumb_path;
+    bool is_original = false;
+
+    // 1) When the user chose "original" or "epdgz" and the source file is a
+    //    format Telegram can decode (JPG/PNG/BMP), send it directly instead of
+    //    generating a thumbnail. EPDGZ sources cannot be decoded by Telegram at
+    //    all, so only "epdgz" mode attempts to send them as-is (will fail).
+    if (strcmp(rn_format, TELEGRAM_ROTATE_NOTIFY_FORMAT_ORIGINAL) == 0 ||
+        strcmp(rn_format, TELEGRAM_ROTATE_NOTIFY_FORMAT_EPDGZ) == 0) {
+        if (ext && (strcasecmp(ext, ".jpg") == 0 || strcasecmp(ext, ".jpeg") == 0 ||
+                    strcasecmp(ext, ".png") == 0 || strcasecmp(ext, ".bmp") == 0)) {
+            struct stat st;
+            if (stat(image_path, &st) == 0) {
+                send_path = image_path;
+                is_original = true;
+            }
+        } else if (strcmp(rn_format, TELEGRAM_ROTATE_NOTIFY_FORMAT_EPDGZ) == 0) {
+            if (ext && strcasecmp(ext, ".epdgz") == 0) {
+                struct stat st;
+                if (stat(image_path, &st) == 0) {
+                    send_path = image_path;
+                    is_original = true;
+                }
+            }
         }
     }
 
+    // 2) Otherwise (or when no suitable original was found), look for a
+    //    pre-existing sidecar thumbnail in any image format Telegram can
+    //    decode (JPG/PNG/BMP) - e.g. one already rendered for the Web UI
+    //    gallery - before generating a new one on demand.
+    if (!send_path && ext) {
+        const char *const thumb_exts[] = {".jpg", ".jpeg", ".png", ".bmp"};
+        for (size_t ti = 0; ti < sizeof(thumb_exts) / sizeof(thumb_exts[0]); ti++) {
+            strcpy(ext, thumb_exts[ti]);
+            struct stat st;
+            if (strcmp(thumb_path, image_path) != 0 && stat(thumb_path, &st) == 0) {
+                send_path = thumb_path;
+                break;
+            }
+        }
+    }
+
+    // 3) Last resort: generate a thumbnail on demand.
     if (!send_path) {
         if (image_processor_make_thumbnail(image_path, TELEGRAM_THUMBNAIL_MAX_DIMENSION,
                                            TELEGRAM_NOTIFY_THUMB_PATH) == ESP_OK) {
@@ -1442,13 +1479,14 @@ esp_err_t telegram_bot_notify_fallback_image(const char *image_path)
             return ESP_FAIL;
         }
     }
+}
 
-    const char *fname = strrchr(image_path, '/');
-    fname = fname ? fname + 1 : image_path;
-    char caption[192];
-    snprintf(caption, sizeof(caption), "[i] Auto-rotate (no new Telegram image): %.100s", fname);
+const char *fname = strrchr(image_path, '/');
+fname = fname ? fname + 1 : image_path;
+char caption[192];
+snprintf(caption, sizeof(caption), "[i] Auto-rotate (no new Telegram image): %.100s", fname);
 
-    return telegram_bot_send_photo_file(send_path, caption);
+return telegram_bot_send_photo_file(send_path, caption);
 }
 
 // Reads just enough of a file to determine its pixel dimensions (bounded

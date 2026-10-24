@@ -558,6 +558,22 @@ typedef enum {
 #define TELEGRAM_IMAGE_FORMAT_EPDGZ "epdgz"
 #define TELEGRAM_IMAGE_FORMAT_DEFAULT TELEGRAM_IMAGE_FORMAT_EPDGZ
 
+// Rotation notify image source: what to send to Telegram when the frame
+// rotates to a new image and telegram_rotation_notify_enabled is on.
+// "thumbnail"  - always generate and send a scaled thumbnail (current,
+//                default, works with any source format)
+// "original"   - send the original album file if it is a format Telegram
+//                can decode (JPG/PNG/BMP); otherwise fall back to a thumbnail
+// "epdgz"      - send the original album file as-is if it is EPDGZ
+//                (Telegram cannot decode EPDGZ, so this will fail for
+//                 EPDGZ sources - offered for completeness/testing)
+#define NVS_TELEGRAM_ROTATE_NOTIFY_FORMAT_KEY "tg_rn_fmt"
+#define TELEGRAM_ROTATE_NOTIFY_FORMAT_MAX_LEN 16
+#define TELEGRAM_ROTATE_NOTIFY_FORMAT_THUMBNAIL "thumbnail"
+#define TELEGRAM_ROTATE_NOTIFY_FORMAT_ORIGINAL "original"
+#define TELEGRAM_ROTATE_NOTIFY_FORMAT_EPDGZ "epdgz"
+#define TELEGRAM_ROTATE_NOTIFY_FORMAT_DEFAULT TELEGRAM_ROTATE_NOTIFY_FORMAT_THUMBNAIL
+
 // Weather + headline overlays: composited as a text bar across the TOP of
 // whatever image a rotation is about to show (see CURRENT_OVERLAY_PNG_PATH) -
 // on-device alternative to esp32-photoframe-server's weather overlay, no

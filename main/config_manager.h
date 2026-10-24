@@ -305,6 +305,11 @@ bool config_manager_get_telegram_keep_originals_enabled(void);
 void config_manager_set_telegram_image_format(const char *format);
 const char *config_manager_get_telegram_image_format(void);
 
+// Rotation notify image source: "thumbnail", "original" or "epdgz".
+// Defaults to TELEGRAM_ROTATE_NOTIFY_FORMAT_DEFAULT ("thumbnail").
+void config_manager_set_telegram_rotation_notify_format(const char *format);
+const char *config_manager_get_telegram_rotation_notify_format(void);
+
 // Duplicate detection: skip re-downloading/re-displaying a Telegram photo or
 // document whose "file_unique_id" was already seen. See
 // NVS_TELEGRAM_DEDUP_ENABLED_KEY in config.h. Defaults to disabled.

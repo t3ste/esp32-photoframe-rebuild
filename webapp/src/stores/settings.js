@@ -128,6 +128,7 @@ export const useSettingsStore = defineStore("settings", () => {
     telegramPowerSaveLatestOnly: false,
     telegramKeepOriginalsEnabled: false,
     telegramImageFormat: "epdgz",
+    telegramRotationNotifyFormat: "thumbnail",
     telegramDedupEnabled: false,
 // #endif
 // #if FEATURE_OVERLAYS
@@ -677,6 +678,8 @@ export const useSettingsStore = defineStore("settings", () => {
       deviceSettings.value.telegramKeepOriginalsEnabled =
         data.telegram_keep_originals_enabled === true;
       deviceSettings.value.telegramImageFormat = data.telegram_image_format || "epdgz";
+      deviceSettings.value.telegramRotationNotifyFormat =
+        data.telegram_rotation_notify_format || "thumbnail";
       deviceSettings.value.telegramDedupEnabled = data.telegram_dedup_enabled === true;
 // #endif
 // #if FEATURE_OVERLAYS
@@ -1040,6 +1043,8 @@ export const useSettingsStore = defineStore("settings", () => {
       telegram_power_save_latest_only: deviceSettings.value.telegramPowerSaveLatestOnly,
       telegram_keep_originals_enabled: deviceSettings.value.telegramKeepOriginalsEnabled,
       telegram_image_format: deviceSettings.value.telegramImageFormat,
+      telegram_rotation_notify_format:
+        deviceSettings.value.telegramRotationNotifyFormat,
       telegram_dedup_enabled: deviceSettings.value.telegramDedupEnabled,
 // #endif
 // #if FEATURE_OVERLAYS

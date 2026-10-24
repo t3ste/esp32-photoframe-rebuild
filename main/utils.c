@@ -861,6 +861,10 @@ esp_err_t apply_config_from_json(cJSON *root, bool from_remote)
     if (item && cJSON_IsString(item)) {
         config_manager_set_telegram_image_format(cJSON_GetStringValue(item));
     }
+    item = cJSON_GetObjectItem(root, "telegram_rotation_notify_format");
+    if (item && cJSON_IsString(item)) {
+        config_manager_set_telegram_rotation_notify_format(cJSON_GetStringValue(item));
+    }
     item = cJSON_GetObjectItem(root, "telegram_dedup_enabled");
     if (item && cJSON_IsBool(item)) {
         config_manager_set_telegram_dedup_enabled(cJSON_IsTrue(item));

@@ -40,6 +40,15 @@ has a 2.19 and it is merged in: `v219.0.0`, then `v219.0.1`, ...).
   in the HTTP request headers"). **Not tested with a Home Assistant installation yet** (none available to receive and
   display the headers); the Waveshare PhotoPainter 7.3" does have an SHTC3 climate sensor.
 
+- **Rotation notify image source** (`main/telegram_bot.c`, `main/utils.c`, Web UI): new setting "Rotation notify image"
+  (Web UI: Settings -> Telegram) with three modes: "Thumbnail" (always generate and send a scaled thumbnail, the
+  historical behavior), "Original if possible" (send the album file directly when it is a format Telegram can decode
+  - JPG/PNG/BMP - and fall back to a thumbnail otherwise), and "EPDGZ" (send the original EPDGZ file as-is; Telegram
+  cannot decode EPDGZ, so this fails for EPDGZ sources). Defaults to "Thumbnail". Gated behind
+  `FEATURE_TELEGRAM` / `CONFIG_FEATURE_TELEGRAM`, stored in NVS as `tg_rn_fmt`. Before generating a new thumbnail,
+  any pre-existing sidecar thumbnail in a Telegram-decodable format (JPG/PNG/BMP) - e.g. one already rendered for
+  the Web UI gallery - is reused instead.
+
 ## [v219.0.5] - 2026-10-23
 
 CA certificate functions wrapped with `#if CONFIG_FEATURE_HTTPS ... #else` so every feature off restores upstream's exact text; missing semicolon in `config_manager_clear_ca_cert_der_if_unchanged`; all web sources wrapped with `FORK_FIXES` guards so `alloff_web.py` passes; `Icon.vue` formatted with prettier so the code formatting check passes. CI: format-check, host-tests and feature-tooling all green.

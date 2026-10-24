@@ -3035,6 +3035,37 @@ async function performFactoryReset() {
                       per-pixel color re-matching needed on every future display, unlike PNG.
                     </div>
 
+                    <v-select
+                      v-model="settingsStore.deviceSettings.telegramRotationNotifyFormat"
+                      :items="[
+                        {
+                          title: 'Thumbnail (always generate)',
+                          value: 'thumbnail',
+                        },
+                        {
+                          title: 'Original if possible (JPG/PNG/BMP direct, else thumbnail)',
+                          value: 'original',
+                        },
+                        {
+                          title: 'EPDGZ (always, if available)',
+                          value: 'epdgz',
+                        },
+                      ]"
+                      label="Rotation notify image"
+                      variant="outlined"
+                      density="compact"
+                      hide-details
+                      class="mb-2"
+                    />
+                    <div class="text-caption text-medium-emphasis mb-4">
+                      What to send to Telegram when auto-rotation shows a new image and rotation
+                      notify is on. "Thumbnail" generates a small preview from any source.
+                      "Original if possible" sends the album file directly when it is a format
+                      Telegram can decode (JPG/PNG/BMP) and falls back to a thumbnail otherwise.
+                      "EPDGZ" sends the original EPDGZ file as-is - Telegram cannot decode EPDGZ,
+                      so this will fail for EPDGZ sources.
+                    </div>
+
                     <v-switch
                       v-model="settingsStore.deviceSettings.telegramDedupEnabled"
                       label="Skip duplicate photos/files"
