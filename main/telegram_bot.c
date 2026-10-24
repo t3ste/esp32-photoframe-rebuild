@@ -1426,57 +1426,53 @@ esp_err_t telegram_bot_notify_fallback_image(const char *image_path)
     thumb_path[sizeof(thumb_path) - 1] = '\0';
     char *ext = strrchr(thumb_path, '.');
     const char *send_path = NULL;
-    bool is_original = false;
 
-    // 1) When the user chose "original" or "epdgz" and the source file is a
-    //    format Telegram can decode (JPG/PNG/BMP), send it directly instead of
-    //    generating a thumbnail. EPDGZ sources cannot be decoded by Telegram at
-    //    all, so only "epdgz" mode attempts to send them as-is (will fail).
-    if (strcmp(rn_format, TELEGRAM_ROTATE_NOTIFY_FORMAT_ORIGINAL) == 0 ||
-        strcmp(rn_format, TELEGRAM_ROTATE_NOTIFY_FORMAT_EPDGZ) == 0) {
-        if (ext && (strcasecmp(ext, ".jpg") == 0 || strcasecmp(ext, ".jpeg") == 0 ||
-                    strcasecmp(ext, ".png") == 0 || strcasecmp(ext, ".bmp") == 0)) {
-            struct stat st;
-            if (stat(image_path, &st) == 0) {
-                send_path = image_path;
-                is_original = true;
+    // Build the canonical thumbnail sidecar path: same directory and base name
+    // as the displayed image, but with .jpg extension. This matches what the
+    // Web UI gallery generates (see display_flow.c / http_server.c) - the
+    // .jpg sibling of the displayed image is its gallery thumbnail.
+    if (ext) {
+        strcpy(ext, ".jpg");
+        struct stat st;
+        if (strcmp(thumb_path, image_path) != 0 && stat(thumb_path, &st) == 0) {
+            send_path = thumb_path;
+        }
+    }
+
+    // If no pre-existing thumbnail sidecar was found, handle per format:
+    if (!send_path) {
+        if (strcmp(rn_format, TELEGRAM_ROTATE_NOTIFY_FORMAT_ORIGINAL) == 0) {
+            // "Original if possible": send the album file directly if Telegram
+            // can decode it (JPG/PNG/BMP); otherwise fall back to thumbnail.
+            if (ext && (strcasecmp(ext, ".jpg") == 0 || strcasecmp(ext, ".jpeg") == 0 ||
+                        strcasecmp(ext, ".png") == 0 || strcasecmp(ext, ".bmp") == 0)) {
+                struct stat st;
+                if (stat(image_path, &st) == 0) {
+                    send_path = image_path;
+                }
             }
         } else if (strcmp(rn_format, TELEGRAM_ROTATE_NOTIFY_FORMAT_EPDGZ) == 0) {
+            // "EPDGZ": send the original file as-is. Telegram cannot decode
+            // EPDGZ (this project's palette-indexed/gzip format), so this
+            // will fail with IMAGE_PROCESS_FAILED - offered for completeness.
             if (ext && strcasecmp(ext, ".epdgz") == 0) {
                 struct stat st;
                 if (stat(image_path, &st) == 0) {
                     send_path = image_path;
-                    is_original = true;
                 }
             }
         }
-    }
 
-    // 2) Otherwise (or when no suitable original was found), look for a
-    //    pre-existing sidecar thumbnail in any image format Telegram can
-    //    decode (JPG/PNG/BMP) - e.g. one already rendered for the Web UI
-    //    gallery - before generating a new one on demand.
-    if (!send_path && ext) {
-        const char *const thumb_exts[] = {".jpg", ".jpeg", ".png", ".bmp"};
-        for (size_t ti = 0; ti < sizeof(thumb_exts) / sizeof(thumb_exts[0]); ti++) {
-            strcpy(ext, thumb_exts[ti]);
-            struct stat st;
-            if (strcmp(thumb_path, image_path) != 0 && stat(thumb_path, &st) == 0) {
-                send_path = thumb_path;
-                break;
+        // Last resort: generate a thumbnail on demand.
+        if (!send_path) {
+            if (image_processor_make_thumbnail(image_path, TELEGRAM_THUMBNAIL_MAX_DIMENSION,
+                                               TELEGRAM_NOTIFY_THUMB_PATH) == ESP_OK) {
+                send_path = TELEGRAM_NOTIFY_THUMB_PATH;
+            } else {
+                ESP_LOGW(TAG, "Rotation notify: could not thumbnail %s, skipping Telegram upload",
+                         image_path);
+                return ESP_FAIL;
             }
-        }
-    }
-
-    // 3) Last resort: generate a thumbnail on demand.
-    if (!send_path) {
-        if (image_processor_make_thumbnail(image_path, TELEGRAM_THUMBNAIL_MAX_DIMENSION,
-                                           TELEGRAM_NOTIFY_THUMB_PATH) == ESP_OK) {
-            send_path = TELEGRAM_NOTIFY_THUMB_PATH;
-        } else {
-            ESP_LOGW(TAG, "Rotation notify: could not thumbnail %s, skipping Telegram upload",
-                     image_path);
-            return ESP_FAIL;
         }
     }
 

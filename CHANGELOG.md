@@ -46,8 +46,9 @@ has a 2.19 and it is merged in: `v219.0.0`, then `v219.0.1`, ...).
   - JPG/PNG/BMP - and fall back to a thumbnail otherwise), and "EPDGZ" (send the original EPDGZ file as-is; Telegram
   cannot decode EPDGZ, so this fails for EPDGZ sources). Defaults to "Thumbnail". Gated behind
   `FEATURE_TELEGRAM` / `CONFIG_FEATURE_TELEGRAM`, stored in NVS as `tg_rn_fmt`. Before generating a new thumbnail,
-  any pre-existing sidecar thumbnail in a Telegram-decodable format (JPG/PNG/BMP) - e.g. one already rendered for
-  the Web UI gallery - is reused instead.
+  any pre-existing sidecar thumbnail (same base name as the displayed image with `.jpg` extension - e.g. one already
+  rendered for the Web UI gallery) is reused instead of regenerating. The image sent to Telegram always matches the
+  image currently shown on the ePaper display (same base filename).
 
 ## [v219.0.5] - 2026-10-23
 
