@@ -25,8 +25,15 @@ has a 2.19 and it is merged in: `v219.0.0`, then `v219.0.1`, ...).
   large white areas. Near-white pixels and all other colors are processed normally; GC16 mode is unaffected. Only
   exact white (not "near-white") is protected, so mid-tones stay unchanged. Fork of upstream
   [PR #140](https://github.com/aitjcize/esp32-photoframe/pull/140) ("Preserve solid white areas during on-device
-  dithering"), not yet merged upstream; gated behind `FORK_FIXES` / `CONFIG_FORK_FIXES` so the code is upstream's
+  dithering"), not yet merged upstream; gated behind `FORK_FIXES` / `CONFIG_FEATURE_FIXES` so the code is upstream's
   exactly with every feature off.
+
+- **Telegram rotation notify: buffer overflow, wrong image when overlay active, centralized validation** (`main/telegram_bot.c`, `main/config_manager.c`, `main/config_manager.h`, `fixes` option):
+  - Fixed a stack buffer overflow: `strcpy(source_ext, ".jpg")` could write past the end of the path buffer when the extension dot sits near the buffer boundary; the copy is now bounds-checked.
+  - The "Original file" and "EPDGZ file" modes now send the canonical album image (recorded before an overlay was applied via `display_manager_get_last_displayed_image()`) instead of the overlay scratch copy (`.overlay.png` / `.overlay.epdgz`) when an overlay is active.
+  - The last-resort thumbnail is generated from the canonical album image, not the overlay scratch copy.
+  - Extension-check + `stat` centralized in `try_send_original()` so the ORIGINAL and EPDGZ modes can't drift apart; valid-format validation centralized in `telegram_rn_format_is_valid()` used by both init read and setter write.
+  Gated behind `FORK_FIXES` / `CONFIG_FEATURE_FIXES`; part of the rotation notify image source feature ([Issue #157](https://github.com/aitjcize/esp32-photoframe/issues/157)).
 
 ### Added
 
