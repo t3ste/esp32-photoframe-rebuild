@@ -832,6 +832,8 @@ static void cron_from_legacy_interval(int seconds, char *out, size_t out_len)
     }
 }
 
+static bool telegram_rn_format_is_valid(const char *format);
+
 esp_err_t config_manager_init(void)
 {
     ESP_LOGI(TAG, "Initializing config manager");
@@ -1218,9 +1220,7 @@ esp_err_t config_manager_init(void)
         size_t telegram_rn_format_len = sizeof(stored_rn_format);
         if (nvs_get_str(nvs_handle, NVS_TELEGRAM_ROTATE_NOTIFY_FORMAT_KEY, stored_rn_format,
                         &telegram_rn_format_len) == ESP_OK &&
-            (strcmp(stored_rn_format, TELEGRAM_ROTATE_NOTIFY_FORMAT_THUMBNAIL) == 0 ||
-             strcmp(stored_rn_format, TELEGRAM_ROTATE_NOTIFY_FORMAT_ORIGINAL) == 0 ||
-             strcmp(stored_rn_format, TELEGRAM_ROTATE_NOTIFY_FORMAT_EPDGZ) == 0)) {
+            telegram_rn_format_is_valid(stored_rn_format)) {
             strncpy(telegram_rotation_notify_format, stored_rn_format,
                     sizeof(telegram_rotation_notify_format) - 1);
         }
@@ -3178,13 +3178,21 @@ const char *config_manager_get_telegram_image_format(void)
     return telegram_image_format;
 }
 
+// Returns true if `format` is one of the three valid rotation-notify formats.
+// Centralized so the init read-validation and the setter write-validation
+// can't drift apart when a fourth format is added.
+static bool telegram_rn_format_is_valid(const char *format)
+{
+    return strcmp(format, TELEGRAM_ROTATE_NOTIFY_FORMAT_THUMBNAIL) == 0 ||
+           strcmp(format, TELEGRAM_ROTATE_NOTIFY_FORMAT_ORIGINAL) == 0 ||
+           strcmp(format, TELEGRAM_ROTATE_NOTIFY_FORMAT_EPDGZ) == 0;
+}
+
 void config_manager_set_telegram_rotation_notify_format(const char *format)
 {
     if (!format) {
         format = TELEGRAM_ROTATE_NOTIFY_FORMAT_DEFAULT;
-    } else if (strcmp(format, TELEGRAM_ROTATE_NOTIFY_FORMAT_THUMBNAIL) != 0 &&
-               strcmp(format, TELEGRAM_ROTATE_NOTIFY_FORMAT_ORIGINAL) != 0 &&
-               strcmp(format, TELEGRAM_ROTATE_NOTIFY_FORMAT_EPDGZ) != 0) {
+    } else if (!telegram_rn_format_is_valid(format)) {
         format = TELEGRAM_ROTATE_NOTIFY_FORMAT_DEFAULT;
     }
     strncpy(telegram_rotation_notify_format, format, sizeof(telegram_rotation_notify_format) - 1);

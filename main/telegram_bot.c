@@ -1413,6 +1413,28 @@ esp_err_t telegram_bot_send_photo_file(const char *file_path, const char *captio
 // all) it always failed with sendPhoto's generic "Bad Request:
 // IMAGE_PROCESS_FAILED" - confirmed live from a real device's debug log
 // after a user reported never receiving the promised notification.
+// Returns the path to send if `path` has one of `accepted_exts` and the file
+// exists; NULL otherwise. Centralizes the extension-check + stat pattern so
+// the ORIGINAL and EPDGZ modes can't drift apart.
+static const char *try_send_original(const char *path, const char *const *accepted_exts,
+                                     size_t ext_count)
+{
+    const char *ext = strrchr(path, '.');
+    if (!ext) {
+        return NULL;
+    }
+    for (size_t i = 0; i < ext_count; i++) {
+        if (strcasecmp(ext, accepted_exts[i]) == 0) {
+            struct stat st;
+            if (stat(path, &st) == 0) {
+                return path;
+            }
+            return NULL;
+        }
+    }
+    return NULL;
+}
+
 esp_err_t telegram_bot_notify_fallback_image(const char *image_path)
 {
     if (!image_path || image_path[0] == '\0') {
@@ -1440,7 +1462,7 @@ esp_err_t telegram_bot_notify_fallback_image(const char *image_path)
 
     // 1) Reuse any pre-existing sidecar thumbnail (.jpg) of the source image,
     //    e.g. one already rendered for the Web UI gallery.
-    if (source_ext) {
+    if (source_ext && (source_ext - source_thumb_path + 4 < sizeof(source_thumb_path))) {
         strcpy(source_ext, ".jpg");
         struct stat st;
         if (strcmp(source_thumb_path, source_path) != 0 && stat(source_thumb_path, &st) == 0) {
@@ -1453,31 +1475,20 @@ esp_err_t telegram_bot_notify_fallback_image(const char *image_path)
         if (strcmp(rn_format, TELEGRAM_ROTATE_NOTIFY_FORMAT_ORIGINAL) == 0) {
             // "Original if possible": send the album file directly if Telegram
             // can decode it (JPG/PNG/BMP); otherwise fall back to thumbnail.
-            char *image_ext = strrchr(image_path, '.');
-            if (image_ext &&
-                (strcasecmp(image_ext, ".jpg") == 0 || strcasecmp(image_ext, ".jpeg") == 0 ||
-                 strcasecmp(image_ext, ".png") == 0 || strcasecmp(image_ext, ".bmp") == 0)) {
-                struct stat st;
-                if (stat(image_path, &st) == 0) {
-                    send_path = image_path;
-                }
-            }
+            const char *decodable_exts[] = {".jpg", ".jpeg", ".png", ".bmp"};
+            send_path = try_send_original(source_path, decodable_exts,
+                                          sizeof(decodable_exts) / sizeof(decodable_exts[0]));
         } else if (strcmp(rn_format, TELEGRAM_ROTATE_NOTIFY_FORMAT_EPDGZ) == 0) {
             // "EPDGZ": send the original file as-is. Telegram cannot decode
             // EPDGZ (this project's palette-indexed/gzip format), so this
             // will fail with IMAGE_PROCESS_FAILED - offered for completeness.
-            char *image_ext = strrchr(image_path, '.');
-            if (image_ext && strcasecmp(image_ext, ".epdgz") == 0) {
-                struct stat st;
-                if (stat(image_path, &st) == 0) {
-                    send_path = image_path;
-                }
-            }
+            const char *epdgz_exts[] = {".epdgz"};
+            send_path = try_send_original(source_path, epdgz_exts, 1);
         }
 
         // 3) Last resort: generate a thumbnail on demand from the displayed image.
         if (!send_path) {
-            if (image_processor_make_thumbnail(image_path, TELEGRAM_THUMBNAIL_MAX_DIMENSION,
+            if (image_processor_make_thumbnail(source_path, TELEGRAM_THUMBNAIL_MAX_DIMENSION,
                                                TELEGRAM_NOTIFY_THUMB_PATH) == ESP_OK) {
                 send_path = TELEGRAM_NOTIFY_THUMB_PATH;
             } else {
