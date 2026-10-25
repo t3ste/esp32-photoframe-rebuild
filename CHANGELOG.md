@@ -25,8 +25,15 @@ has a 2.19 and it is merged in: `v219.0.0`, then `v219.0.1`, ...).
   large white areas. Near-white pixels and all other colors are processed normally; GC16 mode is unaffected. Only
   exact white (not "near-white") is protected, so mid-tones stay unchanged. Fork of upstream
   [PR #140](https://github.com/aitjcize/esp32-photoframe/pull/140) ("Preserve solid white areas during on-device
-  dithering"), not yet merged upstream; gated behind `FORK_FIXES` / `CONFIG_FORK_FIXES` so the code is upstream's
+  dithering"), not yet merged upstream; gated behind `FORK_FIXES` / `CONFIG_FEATURE_FIXES` so the code is upstream's
   exactly with every feature off.
+
+- **Telegram rotation notify: buffer overflow, wrong image when overlay active, centralized validation** (`main/telegram_bot.c`, `main/config_manager.c`, `main/config_manager.h`, `fixes` option):
+  - Fixed a stack buffer overflow: `strcpy(source_ext, ".jpg")` could write past the end of the path buffer when the extension dot sits near the buffer boundary; the copy is now bounds-checked.
+  - The "Original file" and "EPDGZ file" modes now send the canonical album image (recorded before an overlay was applied via `display_manager_get_last_displayed_image()`) instead of the overlay scratch copy (`.overlay.png` / `.overlay.epdgz`) when an overlay is active.
+  - The last-resort thumbnail is generated from the canonical album image, not the overlay scratch copy.
+  - Extension-check + `stat` centralized in `try_send_original()` so the ORIGINAL and EPDGZ modes can't drift apart; valid-format validation centralized in `telegram_rn_format_is_valid()` used by both init read and setter write.
+  Gated behind `FORK_FIXES` / `CONFIG_FEATURE_FIXES`; part of the rotation notify image source feature ([Issue #157](https://github.com/aitjcize/esp32-photoframe/issues/157)).
 
 ### Added
 
@@ -39,6 +46,19 @@ has a 2.19 and it is merged in: `v219.0.0`, then `v219.0.1`, ...).
   [Issue #157](https://github.com/aitjcize/esp32-photoframe/issues/157) ("include the e-paper device's sensor readings
   in the HTTP request headers"). **Not tested with a Home Assistant installation yet** (none available to receive and
   display the headers); the Waveshare PhotoPainter 7.3" does have an SHTC3 climate sensor.
+
+- **Rotation notify image source** (`main/telegram_bot.c`, `main/utils.c`, `main/display_manager.c`, `main/display_manager.h`, Web UI): new setting "Rotation notify image"
+  (Web UI: Settings -> Telegram) with three modes: "Thumbnail (reuse gallery thumbnail, else generate)" (always generate and send a scaled thumbnail, the
+  historical behavior), "Original file (send directly if decodable)" (send the album file directly when it is a format Telegram can decode
+  - JPG/PNG/BMP - and fall back to a thumbnail otherwise), and "EPDGZ file (raw, Telegram can't decode)" (send the original EPDGZ file as-is; Telegram
+  cannot decode EPDGZ, so this fails for EPDGZ sources). Defaults to "Thumbnail". Gated behind
+  `FEATURE_TELEGRAM` / `CONFIG_FEATURE_TELEGRAM`, stored in NVS as `tg_rn_fmt`. Before generating a new thumbnail,
+  any pre-existing sidecar thumbnail (same base name as the source image before overlay was applied, with `.jpg`
+  extension - e.g. one already rendered for the Web UI gallery) is reused instead of regenerating. The image sent to
+  Telegram always matches the source image that was shown on the ePaper display (same base filename), not an
+  overlay scratch copy (`.overlay.png` / `.overlay.epdgz`). The caption includes the original album filename and an
+  `[overlay: yes]` hint when an overlay was applied. New accessor `display_manager_get_last_displayed_image()`
+  returns the canonical source path recorded before the overlay was applied.
 
 ## [v219.0.5] - 2026-10-23
 

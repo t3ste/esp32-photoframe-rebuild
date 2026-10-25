@@ -119,6 +119,8 @@ static bool telegram_fallback_rotation_enabled = true;
 static bool telegram_fallback_on_error_enabled = true;
 static bool telegram_keep_originals_enabled = false;
 static char telegram_image_format[TELEGRAM_IMAGE_FORMAT_MAX_LEN] = TELEGRAM_IMAGE_FORMAT_DEFAULT;
+static char telegram_rotation_notify_format[TELEGRAM_ROTATE_NOTIFY_FORMAT_MAX_LEN] =
+    TELEGRAM_ROTATE_NOTIFY_FORMAT_DEFAULT;
 static bool telegram_power_save_enabled = false;
 static bool telegram_power_save_latest_only = false;
 
@@ -830,6 +832,8 @@ static void cron_from_legacy_interval(int seconds, char *out, size_t out_len)
     }
 }
 
+static bool telegram_rn_format_is_valid(const char *format);
+
 esp_err_t config_manager_init(void)
 {
     ESP_LOGI(TAG, "Initializing config manager");
@@ -1210,6 +1214,15 @@ esp_err_t config_manager_init(void)
             (strcmp(stored_image_format, TELEGRAM_IMAGE_FORMAT_PNG) == 0 ||
              strcmp(stored_image_format, TELEGRAM_IMAGE_FORMAT_EPDGZ) == 0)) {
             strncpy(telegram_image_format, stored_image_format, sizeof(telegram_image_format) - 1);
+        }
+
+        char stored_rn_format[TELEGRAM_ROTATE_NOTIFY_FORMAT_MAX_LEN] = {0};
+        size_t telegram_rn_format_len = sizeof(stored_rn_format);
+        if (nvs_get_str(nvs_handle, NVS_TELEGRAM_ROTATE_NOTIFY_FORMAT_KEY, stored_rn_format,
+                        &telegram_rn_format_len) == ESP_OK &&
+            telegram_rn_format_is_valid(stored_rn_format)) {
+            strncpy(telegram_rotation_notify_format, stored_rn_format,
+                    sizeof(telegram_rotation_notify_format) - 1);
         }
 
         uint8_t stored_weather_overlay = 0;
@@ -3163,6 +3176,42 @@ void config_manager_set_telegram_image_format(const char *format)
 const char *config_manager_get_telegram_image_format(void)
 {
     return telegram_image_format;
+}
+
+// Returns true if `format` is one of the three valid rotation-notify formats.
+// Centralized so the init read-validation and the setter write-validation
+// can't drift apart when a fourth format is added.
+static bool telegram_rn_format_is_valid(const char *format)
+{
+    return strcmp(format, TELEGRAM_ROTATE_NOTIFY_FORMAT_THUMBNAIL) == 0 ||
+           strcmp(format, TELEGRAM_ROTATE_NOTIFY_FORMAT_ORIGINAL) == 0 ||
+           strcmp(format, TELEGRAM_ROTATE_NOTIFY_FORMAT_EPDGZ) == 0;
+}
+
+void config_manager_set_telegram_rotation_notify_format(const char *format)
+{
+    if (!format) {
+        format = TELEGRAM_ROTATE_NOTIFY_FORMAT_DEFAULT;
+    } else if (!telegram_rn_format_is_valid(format)) {
+        format = TELEGRAM_ROTATE_NOTIFY_FORMAT_DEFAULT;
+    }
+    strncpy(telegram_rotation_notify_format, format, sizeof(telegram_rotation_notify_format) - 1);
+    telegram_rotation_notify_format[sizeof(telegram_rotation_notify_format) - 1] = '\0';
+
+    nvs_handle_t nvs_handle;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle) == ESP_OK) {
+        nvs_set_str(nvs_handle, NVS_TELEGRAM_ROTATE_NOTIFY_FORMAT_KEY,
+                    telegram_rotation_notify_format);
+        nvs_commit(nvs_handle);
+        nvs_close(nvs_handle);
+    }
+
+    ESP_LOGI(TAG, "Telegram rotation notify format set to %s", telegram_rotation_notify_format);
+}
+
+const char *config_manager_get_telegram_rotation_notify_format(void)
+{
+    return telegram_rotation_notify_format;
 }
 
 void config_manager_set_telegram_dedup_enabled(bool enabled)

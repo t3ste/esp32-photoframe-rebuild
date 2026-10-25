@@ -2536,6 +2536,8 @@ static esp_err_t config_handler(httpd_req_t *req)
                               config_manager_get_telegram_keep_originals_enabled());
         cJSON_AddStringToObject(root, "telegram_image_format",
                                 config_manager_get_telegram_image_format());
+        cJSON_AddStringToObject(root, "telegram_rotation_notify_format",
+                                config_manager_get_telegram_rotation_notify_format());
         cJSON_AddBoolToObject(root, "telegram_dedup_enabled",
                               config_manager_get_telegram_dedup_enabled());
 #endif

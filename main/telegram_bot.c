@@ -1296,7 +1296,7 @@ static void finalize_telegram_image(char *path, size_t path_len, const char *arc
 // bytes Telegram has never seen (e.g. a locally generated thumbnail). Kept
 // to small files (thumbnails) - buffers the whole multipart body in SPIRAM
 // rather than streaming, which keeps this simple and is fine at that size.
-static esp_err_t telegram_bot_send_photo_file(const char *file_path, const char *caption)
+esp_err_t telegram_bot_send_photo_file(const char *file_path, const char *caption)
 {
     if (!config_manager_telegram_is_configured() || !file_path) {
         return ESP_ERR_INVALID_STATE;
@@ -1413,40 +1413,103 @@ static esp_err_t telegram_bot_send_photo_file(const char *file_path, const char 
 // all) it always failed with sendPhoto's generic "Bad Request:
 // IMAGE_PROCESS_FAILED" - confirmed live from a real device's debug log
 // after a user reported never receiving the promised notification.
+// Returns the path to send if `path` has one of `accepted_exts` and the file
+// exists; NULL otherwise. Centralizes the extension-check + stat pattern so
+// the ORIGINAL and EPDGZ modes can't drift apart.
+static const char *try_send_original(const char *path, const char *const *accepted_exts,
+                                     size_t ext_count)
+{
+    const char *ext = strrchr(path, '.');
+    if (!ext) {
+        return NULL;
+    }
+    for (size_t i = 0; i < ext_count; i++) {
+        if (strcasecmp(ext, accepted_exts[i]) == 0) {
+            struct stat st;
+            if (stat(path, &st) == 0) {
+                return path;
+            }
+            return NULL;
+        }
+    }
+    return NULL;
+}
+
 esp_err_t telegram_bot_notify_fallback_image(const char *image_path)
 {
     if (!image_path || image_path[0] == '\0') {
         return ESP_ERR_INVALID_ARG;
     }
 
-    char thumb_path[320];
-    strncpy(thumb_path, image_path, sizeof(thumb_path) - 1);
-    thumb_path[sizeof(thumb_path) - 1] = '\0';
-    char *ext = strrchr(thumb_path, '.');
+    const char *rn_format = config_manager_get_telegram_rotation_notify_format();
+
+    // The image currently shown on the panel may be an overlay scratch copy
+    // (.overlay.png / .overlay.epdgz) rather than the real album file when
+    // weather/headlines/captions are drawn on top. Use the canonical source
+    // path (recorded before the overlay was applied) for thumbnail lookup so
+    // we find the existing gallery thumbnail instead of sending a synthetic
+    // overlay file that Telegram can't decode.
+    const char *source_path = display_manager_get_last_displayed_image();
+    if (!source_path || source_path[0] == '\0') {
+        source_path = image_path;
+    }
+
+    char source_thumb_path[320];
+    strncpy(source_thumb_path, source_path, sizeof(source_thumb_path) - 1);
+    source_thumb_path[sizeof(source_thumb_path) - 1] = '\0';
+    char *source_ext = strrchr(source_thumb_path, '.');
     const char *send_path = NULL;
-    if (ext && (size_t) (ext - thumb_path) + 4 < sizeof(thumb_path)) {
-        strcpy(ext, ".jpg");
+
+    // 1) Reuse any pre-existing sidecar thumbnail (.jpg) of the source image,
+    //    e.g. one already rendered for the Web UI gallery.
+    if (source_ext && (source_ext - source_thumb_path + 4 < sizeof(source_thumb_path))) {
+        strcpy(source_ext, ".jpg");
         struct stat st;
-        if (strcmp(thumb_path, image_path) != 0 && stat(thumb_path, &st) == 0) {
-            send_path = thumb_path;
+        if (strcmp(source_thumb_path, source_path) != 0 && stat(source_thumb_path, &st) == 0) {
+            send_path = source_thumb_path;
         }
     }
 
+    // 2) If no sidecar thumbnail exists, handle per mode.
     if (!send_path) {
-        if (image_processor_make_thumbnail(image_path, TELEGRAM_THUMBNAIL_MAX_DIMENSION,
-                                           TELEGRAM_NOTIFY_THUMB_PATH) == ESP_OK) {
-            send_path = TELEGRAM_NOTIFY_THUMB_PATH;
-        } else {
-            ESP_LOGW(TAG, "Rotation notify: could not thumbnail %s, skipping Telegram upload",
-                     image_path);
-            return ESP_FAIL;
+        if (strcmp(rn_format, TELEGRAM_ROTATE_NOTIFY_FORMAT_ORIGINAL) == 0) {
+            // "Original if possible": send the album file directly if Telegram
+            // can decode it (JPG/PNG/BMP); otherwise fall back to thumbnail.
+            const char *decodable_exts[] = {".jpg", ".jpeg", ".png", ".bmp"};
+            send_path = try_send_original(source_path, decodable_exts,
+                                          sizeof(decodable_exts) / sizeof(decodable_exts[0]));
+        } else if (strcmp(rn_format, TELEGRAM_ROTATE_NOTIFY_FORMAT_EPDGZ) == 0) {
+            // "EPDGZ": send the original file as-is. Telegram cannot decode
+            // EPDGZ (this project's palette-indexed/gzip format), so this
+            // will fail with IMAGE_PROCESS_FAILED - offered for completeness.
+            const char *epdgz_exts[] = {".epdgz"};
+            send_path = try_send_original(source_path, epdgz_exts, 1);
+        }
+
+        // 3) Last resort: generate a thumbnail on demand from the displayed image.
+        if (!send_path) {
+            if (image_processor_make_thumbnail(source_path, TELEGRAM_THUMBNAIL_MAX_DIMENSION,
+                                               TELEGRAM_NOTIFY_THUMB_PATH) == ESP_OK) {
+                send_path = TELEGRAM_NOTIFY_THUMB_PATH;
+            } else {
+                ESP_LOGW(TAG, "Rotation notify: could not thumbnail %s, skipping Telegram upload",
+                         image_path);
+                return ESP_FAIL;
+            }
         }
     }
 
-    const char *fname = strrchr(image_path, '/');
-    fname = fname ? fname + 1 : image_path;
-    char caption[192];
-    snprintf(caption, sizeof(caption), "[i] Auto-rotate (no new Telegram image): %.100s", fname);
+    // Determine the display filename for the Telegram caption: prefer the
+    // original album base name over the overlay scratch copy path so the
+    // recipient sees the actual photo filename, not a synthetic .overlay.*
+    // scratch name. Also record whether an overlay scratch copy was involved.
+    bool overlay_active = (source_path != image_path && strcmp(source_path, image_path) != 0);
+    const char *display_fname = source_path ? source_path : image_path;
+    const char *dname = strrchr(display_fname, '/');
+    dname = dname ? dname + 1 : display_fname;
+    char caption[224];
+    snprintf(caption, sizeof(caption), "[i] Auto-rotate (no new Telegram image): %.100s%s", dname,
+             overlay_active ? "  [overlay: yes]" : "");
 
     return telegram_bot_send_photo_file(send_path, caption);
 }

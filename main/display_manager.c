@@ -572,6 +572,11 @@ const char *display_manager_get_current_image(void)
     return current_image;
 }
 
+const char *display_manager_get_last_displayed_image(void)
+{
+    return last_displayed_image;
+}
+
 #if FEATURE_FACECROP
 // Face-aware crop variant selection (config_manager_get_variant_selection_enabled(),
 // opt-in, off by default - see docs/FACE_CROP.md). process-cli's

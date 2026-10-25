@@ -3035,6 +3035,39 @@ async function performFactoryReset() {
                       per-pixel color re-matching needed on every future display, unlike PNG.
                     </div>
 
+                    <v-select
+                      v-model="settingsStore.deviceSettings.telegramRotationNotifyFormat"
+                      :items="[
+                        {
+                          title: 'Thumbnail (reuse gallery thumbnail, else generate)',
+                          value: 'thumbnail',
+                        },
+                        {
+                          title: 'Original file (send directly if decodable)',
+                          value: 'original',
+                        },
+                        {
+                          title: 'EPDGZ file (raw, Telegram can\'t decode)',
+                          value: 'epdgz',
+                        },
+                      ]"
+                      label="Rotation notify image"
+                      variant="outlined"
+                      density="compact"
+                      hide-details
+                      class="mb-2"
+                    />
+                    <div class="text-caption text-medium-emphasis mb-4">
+                      What to send to Telegram when auto-rotation shows a new image and rotation
+                      notify is on. "Thumbnail" reuses an existing gallery thumbnail if one exists,
+                      otherwise generates one on demand. "Original file" sends the album file directly
+                      when Telegram can decode it (JPG/PNG/BMP) and falls back to a thumbnail
+                      otherwise. "EPDGZ file" sends the original EPDGZ file as-is - Telegram cannot
+                      decode EPDGZ, so this will fail for EPDGZ sources. If an overlay (weather,
+                      headlines, captions) was drawn on top of the photo before display, the
+                      original album image filename is shown in the caption with "[overlay: yes]".
+                    </div>
+
                     <v-switch
                       v-model="settingsStore.deviceSettings.telegramDedupEnabled"
                       label="Skip duplicate photos/files"

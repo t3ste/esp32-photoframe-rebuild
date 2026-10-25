@@ -16,6 +16,7 @@ esp_err_t display_manager_clear(void);
 bool display_manager_is_busy(void);
 void display_manager_rotate_from_storage(void);
 const char *display_manager_get_current_image(void);
+const char *display_manager_get_last_displayed_image(void);
 void display_manager_initialize_paint(void);
 
 #if FEATURE_ARTWORKS

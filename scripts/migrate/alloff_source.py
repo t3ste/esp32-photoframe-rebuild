@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/ usr / bin / env python3
 """Source-level proof that "no feature" is the upstream code.
 
 Resolves the FEATURE_*/FORK_* guards of every source file that also exists in the
@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SUFFIXES = (".c", ".h", ".cpp", ".hpp", ".tpp", ".txt", ".cmake")
 SKIPPED_PREFIXES = ("managed_components", "webapp")
 
-# Intended differences: what the flags need in order to exist at all.
+# Intended differences : what the flags need in order to exist at all.
 EXPECTED = {
     "main/CMakeLists.txt": "source lists and embedded files of the features",
     "components/board_hal/CMakeLists.txt": "audio HAL source, optional requirements",
@@ -35,8 +35,12 @@ EXPECTED = {
     "components/board_hal/src/battery_adc.c": "battery ADC enable pin kept driven through light sleep",
     "main/config.h": "OTA feed built from the FORK_OTA_REPO option (upstream by default)",
     "host_tests/CMakeLists.txt": "fork tests",
-    # clang-format 18 writes the one-line initializer, upstream's file predates it
+    # clang - format 18 writes the one - line initializer, upstream's file predates it
     "main/image_processor.c": "GRAY() macro layout; FORK_FIXES solid-white preservation during dithering",
+    # display_manager_get_last_displayed_image(): canonical source path before overlay,
+    # used by telegram_bot_notify_fallback_image() to find the right thumbnail
+    "main/display_manager.c": "display_manager_get_last_displayed_image() accessor",
+    "main/display_manager.h": "display_manager_get_last_displayed_image() declaration",
     # CA certificate / HTTPS feature: only present when CONFIG_FEATURE_HTTPS is on
     "main/cert_pin.c": "CA certificate pinning feature",
     "main/cert_pin.h": "CA certificate pinning header",
@@ -59,9 +63,10 @@ def normalise(text):
     return [line for line in lines if line]
 
 
-# The newest upstream commit merged into this repository (3e5f3f9 = the first commit after upstream v2.19.0 =
-# 186ebaf; the history is grafted onto v2.18.0-27): move it with every upstream merge, see
-# docs/MAINTAINING.md section 12. alloff_web.py uses it too.
+# The newest upstream commit merged into this repository ( \
+#   3e5f3f9 = the first commit after upstream v2.19.0 =
+#   186ebaf; the history is grafted onto v2.18.0 - 27) : move it with every upstream merge, see
+# docs / MAINTAINING.md section 12. alloff_web.py uses it too.
 BASELINE = "3e5f3f9f83aa2a518bfecb7ec53ae6720463c652"
 
 
